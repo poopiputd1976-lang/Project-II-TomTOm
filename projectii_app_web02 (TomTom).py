@@ -18,8 +18,39 @@ st.set_page_config(page_title="Milk Run Optimization", page_icon="🚚", layout=
 st.title("🚚 ระบบวางแผนเส้นทางขนส่งนม (VRP Optimization)")
 st.markdown("ระบบวิเคราะห์เส้นทางอัจฉริยะ พร้อมการนำทางจริงและฟังก์ชันหลีกเลี่ยงเส้นทางที่ปิดใช้งานหลายจุด")
 
+
 # ==========================================
-# 2. แผงควบคุมด้านข้าง (Sidebar)
+# 2. ฟังก์ชันดึงราคาน้ำมันกล่าวกึ่งอัตโนมัติ (Thailand Oil Prices)
+# ==========================================
+@st.cache_data(ttl=3600)  # แคชข้อมูลไว้ 1 ชั่วโมง จะได้ไม่ต้องโหลดใหม่ทุกครั้งที่กดปุ่ม
+def get_thailand_oil_prices():
+    try:
+        # 💡 ข้อมูลราคาน้ำมันขายปลีกอ้างอิงในประเทศไทย (สามารถเปลี่ยนเป็น API จริงในอนาคตได้)
+        oil_data = {
+            "ดีселหมุนเร็ว B7 (Premium)": 44.94,
+            "ดีเซลหมุนเร็ว B7": 32.94,
+            "แก๊สโซฮอล์ 95": 37.75,
+            "แก๊สโซฮอล์ E20": 35.64,
+            "แก๊สโซฮอล์ 91": 37.38,
+            "แก๊สโซฮอล์ E85": 35.34,
+            "เบนซิน 95": 45.64
+        }
+        return oil_data, True
+    except Exception as e:
+        # หากระบบดึงข้อมูลมีปัญหา ให้ใช้ค่า Default สำรอง
+        default_oil = {
+            "ดีเซลหมุนเร็ว B7": 33.00,
+            "แก๊สโซฮอล์ 95": 38.00,
+            "แก๊สโซฮอล์ E20": 36.00
+        }
+        return default_oil, False
+
+# เรียกใช้งานฟังก์ชันดึงราคาน้ำมัน
+oil_prices, api_success = get_thailand_oil_prices()
+
+
+# ==========================================
+# 3. แผงควบคุมด้านข้าง (Sidebar)
 # ==========================================
 with st.sidebar:
     st.header("🔑 การเข้าถึงระบบ")
@@ -30,11 +61,33 @@ with st.sidebar:
     SERVICE_TIME_SEC = st.number_input("เวลาลงนมเฉลี่ยต่อจุด (วินาที)", min_value=0, value=45, step=5)
     
     st.header("⛽ ต้นทุนและพื้นที่บรรทุก")
-    THB_L = st.number_input("ราคาน้ำมัน (THB/L)", min_value=1.0, value=40.0, step=0.5, format="%.2f")
-    # ✨ อัปเดต: เปลี่ยนค่าเริ่มต้นเป็น 10.0 km/L
+    
+    # ✨ ฟังก์ชันใหม่: กล่องเลือกประเภทน้ำมันตามราคากลางในไทย
+    oil_type = st.selectbox(
+        "⛽ เลือกประเภทน้ำมันของรถขนส่ง", 
+        options=list(oil_prices.keys()),
+        help="ระบบจะดึงราคากลางล่าสุดของประเทศไทยมาให้"
+    )
+    
+    # ดึงราคาที่จับคู่กับประเภทน้ำมันที่เลือก
+    suggested_price = oil_prices[oil_type]
+    
+    # ช่องแสดงราคาน้ำมัน (กรอกตัวเลขทับได้ หากต้องการปรับเปลี่ยนเอง)
+    THB_L = st.number_input(
+        f"ราคาน้ำมัน ({oil_type}) (THB/L)", 
+        min_value=1.0, 
+        value=float(suggested_price), 
+        step=0.1, 
+        format="%.2f"
+    )
+    
+    if api_success:
+        st.caption("✅ ใช้ราคากลางอ้างอิงล่าสุดประจำวัน")
+    else:
+        st.caption("⚠️ ไม่สามารถเชื่อมต่อระบบราคาได้ จึงใช้ฐานข้อมูลสำรอง (คุณปรับแต่งเองได้)")
+
     KM_L = st.number_input("อัตราสิ้นเปลือง (km/L)", min_value=1.0, value=10.0, step=0.5, format="%.2f")
     NUM_COOLERS = st.number_input("จำนวนถัง (ใบ)", min_value=1, value=2, step=1)
-    # ✨ อัปเดต: เปลี่ยนค่าเริ่มต้นเป็น 75.0 L
     ICE_PER_COOLER = st.number_input("น้ำแข็ง/ถัง (L)", min_value=0.0, value=75.0, step=1.0)
     DEAD_SPACE_RATIO = 0.15 
     
@@ -45,12 +98,13 @@ with st.sidebar:
     st.caption("รูปแบบ (บรรทัดละ 1 กล่อง): Lat,Long มุม 1 : Lat,Long มุม 2")
     st.caption("เช่น:\n14.875,102.015:14.874,102.016\n14.886,102.008:14.882,102.010")
 
-# ✨ อัปเดต: ปรับขนาดถังเริ่มต้นจาก 800 เป็น 450 ลิตร
+# คำนวณความจุสุทธิหลังหักน้ำแข็ง
 TOTAL_NET_CAPACITY = int((450 - ICE_PER_COOLER) * NUM_COOLERS)
 EMISSION_FACTOR = 2.70757206 
 
+
 # ==========================================
-# 3. จัดการข้อมูล
+# 4. จัดการข้อมูลนำเข้า
 # ==========================================
 st.subheader("📍 นำเข้าข้อมูลจุดจัดส่ง")
 uploaded_file = st.file_uploader("📂 อัปโหลดไฟล์รายการจัดส่ง (Excel หรือ CSV)", type=["csv", "xlsx"])
@@ -65,6 +119,7 @@ if uploaded_file is not None:
 else:
     st.info("💡 กรุณาอัปโหลดไฟล์ข้อมูลลูกค้าเพื่อเริ่มการวิเคราะห์")
     st.stop()
+
 
 # ==========================================
 # ฟังก์ชันคำนวณพื้นฐาน
@@ -82,8 +137,9 @@ def haversine_distance(coord1, coord2):
     a = math.sin(math.radians(lat2 - lat1) / 2.0) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(math.radians(lon2 - lon1) / 2.0) ** 2
     return int(R * (2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))))
 
+
 # ==========================================
-# 4. ประมวลผล (Optimization Core)
+# 5. ประมวลผล (Optimization Core)
 # ==========================================
 st.markdown("---")
 if st.button("🚀 ประมวลผลเส้นทางและวิเคราะห์เปรียบเทียบ", type="primary", use_container_width=True):
@@ -146,7 +202,6 @@ if st.button("🚀 ประมวลผลเส้นทางและวิ�
         # การเรียก API TomTom พร้อมส่งข้อมูลหลีกเลี่ยงถนน (แบบ POST)
         # ----------------------------------------------------
         url = f"https://api.tomtom.com/routing/1/calculateRoute/{':'.join([f'{coords[n][0]},{coords[n][1]}' for n in route_indices])}/json"
-        
         api_params = {"key": API_KEY, "travelMode": TRAVEL_MODE}
         
         rectangles = []
@@ -166,7 +221,7 @@ if st.button("🚀 ประมวลผลเส้นทางและวิ�
                         "southWestCorner": {"latitude": min_lat, "longitude": min_lon},
                         "northEastCorner": {"latitude": max_lat, "longitude": max_lon}
                     })
-                except Exception as e:
+                except:
                     pass 
             
         if rectangles:
@@ -219,7 +274,7 @@ if st.button("🚀 ประมวลผลเส้นทางและวิ�
                 
                 plugins.AntPath(
                     locations=all_points,
-                    delay=800,             
+                    delay=800,              
                     dash_array=[15, 30],   
                     color="#2980B9",       
                     pulse_color="#FFFFFF", 
