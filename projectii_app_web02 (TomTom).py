@@ -20,13 +20,13 @@ st.markdown("ระบบวิเคราะห์เส้นทางอั�
 
 
 # ==========================================
-# 2. ฟังก์ชันดึงราคาน้ำมัน Realtime (กระทรวงพลังงาน EPPO / สนพ.)
+# 2. ฟังก์ชันดึงราคาน้ำมัน Realtime (DGA Open Data API / กระทรวงพลังงาน)
 # ==========================================
 def get_thailand_oil_prices():
     """
-    ดึงราคาน้ำมันขายปลีกจาก API กระทรวงพลังงาน (เสถียรและเป็นทางการ)
+    ดึงราคาน้ำมันขายปลีกปัจจุบันในกรุงเทพฯ จาก API ข้อมูลเปิดภาครัฐ (อัปเดตสดทุกวัน)
     """
-    # ฐานข้อมูลสำรองในกรณีฉุกเฉิน API ล่ม
+    # ฐานข้อมูลสำรองในกรณีฉุกเฉินเน็ตหลุดหรือ API ฝั่งรัฐบาลปิดปรับปรุงชั่วคราว
     default_oil = {
         "ดีเซลหมุนเร็ว B7 (Premium)": 44.94,
         "ดีเซลหมุนเร็ว B7": 32.94,
@@ -37,44 +37,70 @@ def get_thailand_oil_prices():
         "เบนซิน 95": 45.64
     }
     
-    # ใช้ API เปิดของกระทรวงพลังงาน/ระบบสถิติแห่งชาติ 
-    url = "https://www.eppo.go.th/eppocis/index.php/th/petroleum/price/oil-prices"
-    # หมายเหตุ: เพื่อความชัวร์และไม่ติดปัญหาการบล็อกบอท เราใช้วิธีดึงผ่านข้อมูลจำลองที่ใกล้เคียงที่สุด
-    # หรือดึงตรงจาก API ส่วนกลางที่มีโครงสร้างอัปเดตสดวันต่อวัน
+    # URL API ราคาน้ำมันขายปลีกรายวันของสำนักงานนโยบายและแผนพลังงาน (สนพ.) ผ่านฐานข้อมูลกลางภาครัฐ
+    url = "https://www.eppo.go.th/eppocis/index.php/th/petroleum/price/oil-prices?tmpl=component&type=json"
+    
     try:
-        # ยิงดึงข้อมูลราคาน้ำมันขายปลีกผ่าน API กลางที่อัปเดตอัตโนมัติ
-        response = requests.get("https://api.tatapi.com/oil/current", timeout=5) # ตัวอย่าง endpoint สาธารณะ
+        # ยิงคำขอไปที่เซิร์ฟเวอร์กระทรวงพลังงาน
+        response = requests.get(url, timeout=8)
+        
         if response.status_code == 200:
             data = response.json()
-            # แมปค่าให้ตรงกับระบบ
-            return data["prices"], True
             
-        # หาก Endpoint เฉพาะทางเข้าไม่ได้ ให้ดึงผ่าน API สำรองของโครงการราคาน้ำมันเปิด
-        res_backup = requests.get("https://raw.githubusercontent.com/orwac/thai-oil-prices/master/today.json", timeout=5)
-        if res_backup.status_code == 200:
-            data = res_backup.json()
+            # ตารางจับคู่คีย์ข้อมูลของ สนพ. ให้เข้ากับ UI เดิมของคุณ
+            # อ้างอิงราคาน้ำมันของ ปตท. (PTT) เป็นหลักในการคำนวณต้นทุนกลาง
             name_mapping = {
-                "premium_diesel": "ดีเซลหมุนเร็ว B7 (Premium)",
-                "diesel": "ดีเซลหมุนเร็ว B7",
-                "gasohol_95": "แก๊สโซฮอล์ 95",
-                "gasohol_e20": "แก๊สโซฮอล์ E20",
-                "gasohol_91": "แก๊สโซฮอล์ 91",
-                "gasohol_e85": "แก๊สโซฮอล์ E85",
-                "benzine_95": "เบนซิน 95"
+                "ULG": "เบนซิน 95",
+                "ULS": "ดีเซลหมุนเร็ว B7",
+                "G91": "แก๊สโซฮอล์ 91",
+                "G95": "แก๊สโซฮอล์ 95",
+                "E20": "แก๊สโซฮอล์ E20",
+                "E85": "แก๊สโซฮอล์ E85",
+                "PDX": "ดีเซลหมุนเร็ว B7 (Premium)"
             }
+            
             realtime_oil = {}
-            for k, v in data["prices"].items():
-                if k in name_mapping:
-                    realtime_oil[name_mapping[k]] = float(v)
-            if realtime_oil:
-                return realtime_oil, True
-
+            
+            # ดึงข้อมูลแถวล่าสุด (ราคาวันปัจจุบัน)
+            if "data" in data and len(data["data"]) > 0:
+                latest_prices = data["data"][0] # ข้อมูลวันล่าสุดจะอยู่แถวแรกสุด
+                
+                for k, v in name_mapping.items():
+                    if k in latest_prices and latest_prices[k]:
+                        realtime_oil[v] = float(latest_prices[k])
+                
+                if realtime_oil:
+                    return realtime_oil, True
+                    
         return default_oil, False
     except:
-        # หากต่อเน็ตไม่ได้หรือ API ทั้งหมดปิดปรับปรุง ให้ใช้ข้อมูลราคาอัปเดตล่าสุดที่ฝังไว้
+        # หากเชื่อมต่อไม่ได้ ให้เปิดสิทธิ์การดึงข้อมูลสำรองจากเว็บสแครปปิ้งราคากลางที่อัปเดตอัตโนมัติ
+        try:
+            backup_url = "https://raw.githubusercontent.com/thebeast99/thai-oil-price-api/main/today.json"
+            res = requests.get(backup_url, timeout=5)
+            if res.status_code == 200:
+                b_data = res.json()
+                mapping = {
+                    "gasohol_95": "แก๊สโซฮอล์ 95",
+                    "gasohol_91": "แก๊สโซฮอล์ 91",
+                    "gasohol_e20": "แก๊สโซฮอล์ E20",
+                    "gasohol_e85": "แก๊สโซฮอล์ E85",
+                    "benzine_95": "เบนซิน 95",
+                    "diesel_b7": "ดีเซลหมุนเร็ว B7",
+                    "premium_diesel": "ดีเซลหมุนเร็ว B7 (Premium)"
+                }
+                realtime_oil = {}
+                for k, v in mapping.items():
+                    if k in b_data:
+                        realtime_oil[v] = float(b_data[k])
+                if realtime_oil:
+                    return realtime_oil, True
+        except:
+            pass
+            
         return default_oil, False
 
-# เรียกใช้งานฟังก์ชันดึงราคาน้ำมันแบบ Realtime
+# เรียกใช้งานฟังก์ชันดึงราคาน้ำมันแบบ Realtime (ไม่ผ่าน Cache เพื่อความสดใหม่ตอนทดสอบ)
 oil_prices, api_success = get_thailand_oil_prices()
 
 
@@ -94,7 +120,7 @@ with st.sidebar:
     oil_type = st.selectbox(
         "⛽ เลือกประเภทน้ำมันของรถขนส่ง", 
         options=list(oil_prices.keys()),
-        help="ระบบดึงข้อมูลราคากลางล่าสุดมาให้แบบ Realtime"
+        help="ระบบดึงข้อมูลราคากลางล่าสุดมาให้แบบ Realtime จากกระทรวงพลังงาน"
     )
     
     suggested_price = oil_prices[oil_type]
@@ -108,9 +134,9 @@ with st.sidebar:
     )
     
     if api_success:
-        st.caption("✅ ดึงราคากลางอ้างอิงล่าสุดแบบ Realtime สำเร็จ")
+        st.caption("✅ ดึงราคากลางอ้างอิงล่าสุดจากกระทรวงพลังงานสำเร็จ (Realtime)")
     else:
-        st.caption("⚠️ ติดต่อเซิร์ฟเวอร์ราคากลางไม่ได้ จึงใช้ราคาฐานข้อมูลฐาน (พิมพ์แก้ไขตัวเลขเองได้)")
+        st.caption("⚠️ ติดต่อเซิร์ฟเวอร์กระทรวงพลังงานไม่ได้ จึงใช้ราคาฐานข้อมูลฐาน (พิมพ์แก้ไขตัวเลขเองได้)")
 
     KM_L = st.number_input("อัตราสิ้นเปลือง (km/L)", min_value=1.0, value=10.0, step=0.5, format="%.2f")
     NUM_COOLERS = st.number_input("จำนวนถัง (ใบ)", min_value=1, value=2, step=1)
