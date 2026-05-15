@@ -10,6 +10,7 @@ from folium.plugins import FloatImage
 from streamlit_folium import st_folium
 import pandas as pd
 import io
+import xml.etree.ElementTree as ET
 
 # ==========================================
 # 1. ตั้งค่าหน้าเพจ UI
@@ -20,29 +21,77 @@ st.markdown("ระบบวิเคราะห์เส้นทางอั�
 
 
 # ==========================================
-# 2. ฟังก์ชันดึงราคาน้ำมันกล่าวกึ่งอัตโนมัติ (Thailand Oil Prices)
+# 2. ฟังก์ชันดึงราคาน้ำมันแบบ Realtime จาก ปตท. (SOAP API)
 # ==========================================
 @st.cache_data(ttl=3600)  # แคชข้อมูลไว้ 1 ชั่วโมง จะได้ไม่ต้องโหลดใหม่ทุกครั้งที่กดปุ่ม
 def get_thailand_oil_prices():
+    """
+    ดึงราคาน้ำมันขายปลีกในกรุงเทพฯ และปริมณฑล แบบ Realtime 
+    อ้างอิงจาก Web Service ของ PTTOR
+    """
+    # ฐานข้อมูลสำรอง (Fallback Data) ในกรณีที่ API ของ ปตท. เกิดขัดข้อง
+    default_oil = {
+        "ดีเซลหมุนเร็ว B7 (Premium)": 44.94,
+        "ดีเซลหมุนเร็ว B7": 32.94,
+        "แก๊สโซฮอล์ 95": 37.75,
+        "แก๊สโซฮอล์ E20": 35.64,
+        "แก๊สโซฮอล์ 91": 37.38,
+        "แก๊สโซฮอล์ E85": 35.34,
+        "เบนซิน 95": 45.64
+    }
+    
+    url = "https://orapiweb.pttor.com/oilservice/OilPrice.asmx"
+    
+    # โครงสร้าง SOAP Envelope สำหรับขอข้อมูลราคาน้ำมันปัจจุบัน (ภาษาไทย)
+    payload = """<?xml version="1.0" encoding="utf-8"?>
+    <soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
+      <soap:Body>
+        <CurrentOilPrice xmlns="http://pttor.com">
+          <Language>thai</Language>
+        </CurrentOilPrice>
+      </soap:Body>
+    </soap:Envelope>"""
+    
+    headers = {
+        "Content-Type": "text/xml; charset=utf-8",
+        "SOAPAction": "http://pttor.com/CurrentOilPrice"
+    }
+    
     try:
-        # 💡 ข้อมูลราคาน้ำมันขายปลีกอ้างอิงในประเทศไทย (สามารถเปลี่ยนเป็น API จริงในอนาคตได้)
-        oil_data = {
-            "ดีселหมุนเร็ว B7 (Premium)": 44.94,
-            "ดีเซลหมุนเร็ว B7": 32.94,
-            "แก๊สโซฮอล์ 95": 37.75,
-            "แก๊สโซฮอล์ E20": 35.64,
-            "แก๊สโซฮอล์ 91": 37.38,
-            "แก๊สโซฮอล์ E85": 35.34,
-            "เบนซิน 95": 45.64
-        }
-        return oil_data, True
-    except Exception as e:
-        # หากระบบดึงข้อมูลมีปัญหา ให้ใช้ค่า Default สำรอง
-        default_oil = {
-            "ดีเซลหมุนเร็ว B7": 33.00,
-            "แก๊สโซฮอล์ 95": 38.00,
-            "แก๊สโซฮอล์ E20": 36.00
-        }
+        response = requests.post(url, data=payload, headers=headers, timeout=10)
+        
+        if response.status_code == 200:
+            root = ET.fromstring(response.text)
+            result_text_node = root.find(".//{http://pttor.com}CurrentOilPriceResult")
+            
+            if result_text_node is not None and result_text_node.text:
+                inner_xml = result_text_node.text
+                inner_root = ET.fromstring(inner_xml)
+                
+                # ตารางจับคู่ชื่อของ ปตท. ให้เข้ากับระบบเดิม
+                name_mapping = {
+                    "Premium Diesel": "ดีเซลหมุนเร็ว B7 (Premium)",
+                    "Diesel B7": "ดีเซลหมุนเร็ว B7",
+                    "Gasohol 95": "แก๊สโซฮอล์ 95",
+                    "Gasohol E20": "แก๊สโซฮอล์ E20",
+                    "Gasohol 91": "แก๊สโซฮอล์ 91",
+                    "Gasohol E85": "แก๊สโซฮอล์ E85",
+                    "Benzine 95": "เบนซิน 95"
+                }
+                
+                realtime_oil = {}
+                for fuel in inner_root.findall(".//FUEL"):
+                    fuel_type = fuel.find("PRODUCT").text if fuel.find("PRODUCT") is not None else ""
+                    fuel_price = fuel.find("PRICE").text if fuel.find("PRICE") is not None else ""
+                    
+                    if fuel_type in name_mapping and fuel_price:
+                        realtime_oil[name_mapping[fuel_type]] = float(fuel_price)
+                
+                if realtime_oil:
+                    return realtime_oil, True
+                    
+        return default_oil, False
+    except:
         return default_oil, False
 
 # เรียกใช้งานฟังก์ชันดึงราคาน้ำมัน
@@ -62,17 +111,15 @@ with st.sidebar:
     
     st.header("⛽ ต้นทุนและพื้นที่บรรทุก")
     
-    # ✨ ฟังก์ชันใหม่: กล่องเลือกประเภทน้ำมันตามราคากลางในไทย
+    # กล่องเลือกประเภทน้ำมันตามราคากลาง Realtime ในไทย
     oil_type = st.selectbox(
         "⛽ เลือกประเภทน้ำมันของรถขนส่ง", 
         options=list(oil_prices.keys()),
         help="ระบบจะดึงราคากลางล่าสุดของประเทศไทยมาให้"
     )
     
-    # ดึงราคาที่จับคู่กับประเภทน้ำมันที่เลือก
     suggested_price = oil_prices[oil_type]
     
-    # ช่องแสดงราคาน้ำมัน (กรอกตัวเลขทับได้ หากต้องการปรับเปลี่ยนเอง)
     THB_L = st.number_input(
         f"ราคาน้ำมัน ({oil_type}) (THB/L)", 
         min_value=1.0, 
@@ -82,7 +129,7 @@ with st.sidebar:
     )
     
     if api_success:
-        st.caption("✅ ใช้ราคากลางอ้างอิงล่าสุดประจำวัน")
+        st.caption("✅ ใช้ราคากลางอ้างอิงล่าสุดแบบ Realtime")
     else:
         st.caption("⚠️ ไม่สามารถเชื่อมต่อระบบราคาได้ จึงใช้ฐานข้อมูลสำรอง (คุณปรับแต่งเองได้)")
 
@@ -206,7 +253,7 @@ if st.button("🚀 ประมวลผลเส้นทางและวิ�
         
         rectangles = []
         if AVOID_AREA.strip() != "":
-            for line in AVOID_AREA.strip().split('\n'):
+            for line_idx, line in enumerate(AVOID_AREA.strip().split('\n')):
                 line = line.strip()
                 if not line: continue
                 try:
@@ -222,7 +269,7 @@ if st.button("🚀 ประมวลผลเส้นทางและวิ�
                         "northEastCorner": {"latitude": max_lat, "longitude": max_lon}
                     })
                 except:
-                    pass 
+                    st.warning(f"⚠️ รูปแบบพิกัดพื้นที่ห้ามผ่านในบรรทัดที่ {line_idx+1} ไม่ถูกต้อง กรุณาตรวจสอบ")
             
         if rectangles:
             payload = { "avoidAreas": { "rectangles": rectangles } }
@@ -291,23 +338,14 @@ if st.button("🚀 ประมวลผลเส้นทางและวิ�
                         icon_html = f'''<div style="font-size: 11pt; font-weight: bold; color: white; background-color: #E74C3C; border: 2px solid white; border-radius: 50%; text-align: center; width: 28px; height: 28px; line-height: 24px;">{i}</div>'''
                         folium.Marker([loc['Lat'], loc['Lon']], popup=f"คิว {i}: {loc['ชื่อสถานที่']}", icon=folium.DivIcon(html=icon_html)).add_to(m)
                 
-                if AVOID_AREA.strip() != "":
-                    for i, line in enumerate(AVOID_AREA.strip().split('\n')):
-                        line = line.strip()
-                        if not line: continue
-                        try:
-                            p1_str, p2_str = line.split(':')
-                            lat1, lon1 = map(float, p1_str.split(','))
-                            lat2, lon2 = map(float, p2_str.split(','))
-                            min_lat, max_lat = min(lat1, lat2), max(lat1, lat2)
-                            min_lon, max_lon = min(lon1, lon2), max(lon1, lon2)
-                            
-                            folium.Rectangle(
-                                bounds=[[min_lat, min_lon], [max_lat, max_lon]],
-                                color='#E74C3C', fill=True, fill_color='#E74C3C', fill_opacity=0.3,
-                                name=f'พื้นที่ห้ามผ่าน {i+1}'
-                            ).add_to(m)
-                        except: pass
+                if rectangles:
+                    for i, rect in enumerate(rectangles):
+                        folium.Rectangle(
+                            bounds=[[rect["southWestCorner"]["latitude"], rect["southWestCorner"]["longitude"]], 
+                                    [rect["northEastCorner"]["latitude"], rect["northEastCorner"]["longitude"]]],
+                            color='#E74C3C', fill=True, fill_color='#E74C3C', fill_opacity=0.3,
+                            name=f'พื้นที่ห้ามผ่าน {i+1}'
+                        ).add_to(m)
                 
                 folium.LayerControl().add_to(m)
                 st_folium(m, width="100%", height=500, returned_objects=[])
@@ -326,11 +364,12 @@ if st.button("🚀 ประมวลผลเส้นทางและวิ�
                 st.subheader("📋 ตารางวิเคราะห์คิวงาน (แตะลิงก์เพื่อนำทาง)")
                 schedule = []
                 curr_time = datetime.combine(datetime.today(), DEPART_TIME)
+                
                 for i, n in enumerate(route_indices[:-1]):
                     t_min, l_dist, f_used, c_leg = 0, 0.0, 0.0, 0.0
                     loc_data = edited_df.iloc[n]
                     
-                    if i > 0:
+                    if i > 0 and (i-1) < len(route_data['legs']):
                         leg = route_data['legs'][i-1]['summary']
                         t_min = math.ceil(leg['travelTimeInSeconds'] / 60)
                         l_dist = leg['lengthInMeters'] / 1000
