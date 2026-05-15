@@ -16,15 +16,15 @@ import io
 # ==========================================
 st.set_page_config(page_title="Milk Run Optimization", page_icon="🚚", layout="wide")
 st.title("🚚 ระบบวางแผนเส้นทางขนส่งนม (VRP Optimization)")
-st.markdown("ระบบวิเคราะห์เส้นทางอัจฉริยะ พร้อมการนำทางจริงและฟังก์ชันหลีกเลี่ยงเส้นทางที่ปิดใช้งานหลายจุด")
+st.markdown("ระบบวิเคราะห์เส้นทางอัจฉริยะ พร้อมการนำทางจริงและฟังก์ชันดึงราคาน้ำมันสดจากเว็บ")
 
 
 # ==========================================
-# 2. ฟังก์ชันดึงราคาน้ำมัน "จากเว็บบอร์ดราคากลางจริงของไทย" (Real-time API)
+# 2. ฟังก์ชันดึงราคาน้ำมันสด (Real-time Thailand Oil Price API)
 # ==========================================
-@st.cache_data(ttl=3600)  # ดึงข้อมูลใหม่ทุกๆ 1 ชั่วโมง จะได้ไม่เปลืองเน็ตและไม่ทำให้เว็บช้า
+@st.cache_data(ttl=3600)
 def get_thailand_oil_prices():
-    # โครงสร้างราคาน้ำมันสำรอง (Fallback) หากวันนั้นเว็บพลังงานล่มหรือเน็ตหลุด
+    # ราคาส่วนนี้จะใช้เป็นตัวสำรอง (Fallback) กรณีเว็บล่ม
     fallback_oil = {
         "ดีเซลหมุนเร็ว B7": 32.94,
         "แก๊สโซฮอล์ 95": 37.75,
@@ -34,36 +34,27 @@ def get_thailand_oil_prices():
     }
     
     try:
-        # ดึงข้อมูลจาก API ราคาน้ำมันขายปลีกของไทย (อัปเดตรายวันจาก ปตท./กระทรวงพลังงาน)
-        # ใช้ Open API ยอดนิยมของไทยที่ดึงค่าสดจากสถานีบริการ
-        url = "https://api.bangkok.go.th/api/v1/oil-prices"  # หรือ API แหล่งราคากลางอื่นๆ
-        
-        # ตัวเลือกยอดนิยมอีกทางคือการดึงผ่านข้อมูลราคาน้ำมันดิบล่าสุด หรือ API ของนักพัฒนาไทย (เช่นสรรพสามิต/ปตท.)
-        # ในที่นี้ขอยกตัวอย่าง endpoints สาธารณะที่ดึงราคาแกะจาก XML กระทรวงพลังงานมาให้เป็น JSON
-        response = requests.get("https://raw.githubusercontent.com/orapiportal/retail-oil-prices/main/today.json", timeout=5)
+        # ใช้ API สาธารณะที่ดึงราคาน้ำมันจาก ปตท. (เสถียรกว่าเดิม)
+        url = "https://api.sumitpost.com/api/oil-prices"
+        response = requests.get(url, timeout=10)
         
         if response.status_code == 200:
-            data = response.json()
-            # ทำความสะอาดข้อมูลและจัดรูปแบบเข้าสู่โปรแกรม
-            live_oil_data = {}
-            for item in data.get("prices", []):
-                name = item.get("name")
-                price = item.get("price")
-                if name and price:
-                    live_oil_data[name] = float(price)
+            raw_data = response.json()
+            # เข้าไปดึงข้อมูลในส่วนของ PTT (OR)
+            ptt_prices = raw_data.get("data", {}).get("stations", {}).get("PTT", {})
             
-            if live_oil_data:
-                return live_oil_data, True
+            if ptt_prices:
+                live_data = {}
+                for name, info in ptt_prices.items():
+                    live_data[name] = float(info['price'])
+                return live_data, True
                 
-        # หากเชื่อมต่อได้แต่ format ผิดพลาด ให้ใช้ฐานข้อมูลรวมของ ปตท. ล่าสุด
         return fallback_oil, False
-        
-    except Exception as e:
-        # หากเกิดข้อผิดพลาดในการดึงข้อมูลจากเว็บ ให้ใช้ค่าประมาณการตั้งต้นแทน เพื่อไม่ให้ App ล่ม
+    except:
         return fallback_oil, False
 
-# เรียกใช้งานฟังก์ชันดึงราคาน้ำมันสดจากอินเทอร์เน็ต
-oil_prices, is_live_data = get_thailand_oil_prices()
+# เรียกใช้งานฟังก์ชัน
+oil_prices, is_live = get_thailand_oil_prices()
 
 
 # ==========================================
@@ -79,17 +70,17 @@ with st.sidebar:
     
     st.header("⛽ ต้นทุนและพื้นที่บรรทุก")
     
-    # ดึงรายชื่อประเภทน้ำมันจากเว็บมาให้เลือก
+    # เลือกประเภทน้ำมันจากข้อมูลที่ดึงมาได้
     oil_type = st.selectbox(
         "⛽ เลือกประเภทน้ำมันของรถขนส่ง", 
         options=list(oil_prices.keys()),
-        help="รายการน้ำมันและราคากลางจะเปลี่ยนไปตามหน้าเว็บจริง ณ ปัจจุบัน"
+        index=0
     )
     
-    # จับคู่ราคาจากประเภทน้ำมันที่เลือกจากเว็บ
+    # ดึงราคากลางมาตั้งต้น
     suggested_price = oil_prices[oil_type]
     
-    # ช่องกรอกค่าน้ำมัน (เอาค่าจากเว็บมาใส่ให้ก่อน แต่คนใช้งานยังกดปรับเพิ่ม/ลดเองได้)
+    # ช่องแสดงราคา (ผู้ใช้ยังคงพิมพ์แก้เองได้ถ้าต้องการ)
     THB_L = st.number_input(
         f"ราคาน้ำมัน ({oil_type}) (THB/L)", 
         min_value=1.0, 
@@ -98,27 +89,25 @@ with st.sidebar:
         format="%.2f"
     )
     
-    if is_live_data:
-        st.success("🌐 เชื่อมต่อและดึงราคากลางจากเว็บสำเร็จ (Real-time)")
+    # แสดงสถานะการดึงข้อมูล
+    if is_live:
+        st.success("🌐 ดึงราคากลางล่าสุดจาก ปตท. สำเร็จ")
     else:
-        st.warning("⚠️ ดึงราคาจากเว็บไม่สำเร็จ กำลังใช้ราคากลางฐานระบบสำรอง")
+        st.warning("⚠️ ดึงราคาจากเว็บไม่สำเร็จ กำลังใช้ราคาสันนิษฐาน (สำรอง)")
 
     KM_L = st.number_input("อัตราสิ้นเปลือง (km/L)", min_value=1.0, value=10.0, step=0.5, format="%.2f")
     NUM_COOLERS = st.number_input("จำนวนถัง (ใบ)", min_value=1, value=2, step=1)
     ICE_PER_COOLER = st.number_input("น้ำแข็ง/ถัง (L)", min_value=0.0, value=75.0, step=1.0)
     DEAD_SPACE_RATIO = 0.15 
     
-    st.header("🚧 ข้อจำกัดเส้นทาง (Routing Tweaks)")
-    TRAVEL_MODE = st.selectbox("ประเภทยานพาหนะ (ทดลองเปลี่ยนหากระบบไม่ยอมอ้อมถนน)", ["car", "van", "motorcycle", "truck"], index=1) 
+    st.header("🚧 ข้อจำกัดเส้นทาง")
+    TRAVEL_MODE = st.selectbox("ประเภทยานพาหนะ", ["car", "van", "motorcycle", "truck"], index=1) 
     
-    AVOID_AREA = st.text_area("พิกัดพื้นที่ห้ามผ่าน (ขึ้นบรรทัดใหม่สำหรับกล่องถัดไป)", value="", height=100)
-    st.caption("รูปแบบ (บรรทัดละ 1 กล่อง): Lat,Long มุม 1 : Lat,Long มุม 2")
-    st.caption("เช่น:\n14.875,102.015:14.874,102.016\n14.886,102.008:14.882,102.010")
+    AVOID_AREA = st.text_area("พิกัดพื้นที่ห้ามผ่าน (Lat,Lon:Lat,Lon)", value="", height=100)
 
-# คำนวณความจุสุทธิหลังหักน้ำแข็ง
+# คำนวณความจุรถ
 TOTAL_NET_CAPACITY = int((450 - ICE_PER_COOLER) * NUM_COOLERS)
 EMISSION_FACTOR = 2.70757206 
-
 
 # ==========================================
 # 4. จัดการข้อมูลนำเข้า
@@ -137,10 +126,7 @@ else:
     st.info("💡 กรุณาอัปโหลดไฟล์ข้อมูลลูกค้าเพื่อเริ่มการวิเคราะห์")
     st.stop()
 
-
-# ==========================================
-# ฟังก์ชันคำนวณพื้นฐาน
-# ==========================================
+# --- ส่วนคำนวณเบื้องต้น ---
 def time_to_min(t_str):
     try:
         h, m = map(int, str(t_str).split(':'))
@@ -154,9 +140,8 @@ def haversine_distance(coord1, coord2):
     a = math.sin(math.radians(lat2 - lat1) / 2.0) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(math.radians(lon2 - lon1) / 2.0) ** 2
     return int(R * (2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))))
 
-
 # ==========================================
-# 5. ประมวลผล (Optimization Core)
+# 5. ประมวลผล (Optimization)
 # ==========================================
 st.markdown("---")
 if st.button("🚀 ประมวลผลเส้นทางและวิเคราะห์เปรียบเทียบ", type="primary", use_container_width=True):
@@ -184,7 +169,6 @@ if st.button("🚀 ประมวลผลเส้นทางและวิ�
         
         transit_idx = routing.RegisterTransitCallback(time_callback)
         routing.SetArcCostEvaluatorOfAllVehicles(transit_idx)
-        
         routing.AddDimension(transit_idx, 2880, 2880, False, "Time")
         time_dim = routing.GetDimensionOrDie("Time")
         time_dim.CumulVar(routing.Start(0)).SetValue(DEPART_TIME.hour * 60 + DEPART_TIME.minute)
@@ -192,8 +176,8 @@ if st.button("🚀 ประมวลผลเส้นทางและวิ�
         for i, row in edited_df.iterrows():
             idx = manager.NodeToIndex(i)
             s = time_to_min(row.get("เริ่มรับได้")) or 0
-            e = time_to_min(row.get("ต้องส่งก่อน")) or 2880
             time_dim.CumulVar(idx).SetRange(s, 2880)
+            e = time_to_min(row.get("ต้องส่งก่อน")) or 2880
             if i != 0 and e < 2880:
                 time_dim.SetCumulVarSoftUpperBound(idx, e, 100)
 
@@ -215,34 +199,28 @@ if st.button("🚀 ประมวลผลเส้นทางและวิ�
             index = solution.Value(routing.NextVar(index))
         route_indices.append(0)
 
-        # ----------------------------------------------------
-        # การเรียก API TomTom พร้อมส่งข้อมูลหลีกเลี่ยงถนน (แบบ POST)
-        # ----------------------------------------------------
+        # เรียก TomTom API
         url = f"https://api.tomtom.com/routing/1/calculateRoute/{':'.join([f'{coords[n][0]},{coords[n][1]}' for n in route_indices])}/json"
         api_params = {"key": API_KEY, "travelMode": TRAVEL_MODE}
         
+        # จัดการ AVOID_AREA
         rectangles = []
         if AVOID_AREA.strip() != "":
             for line in AVOID_AREA.strip().split('\n'):
                 line = line.strip()
                 if not line: continue
                 try:
-                    p1_str, p2_str = line.split(':')
-                    lat1, lon1 = map(float, p1_str.split(','))
-                    lat2, lon2 = map(float, p2_str.split(','))
-                    min_lat, max_lat = min(lat1, lat2), max(lat1, lat2)
-                    min_lon, max_lon = min(lon1, lon2), max(lon1, lon2)
-                    
+                    p1, p2 = line.split(':')
+                    lat1, lon1 = map(float, p1.split(','))
+                    lat2, lon2 = map(float, p2.split(','))
                     rectangles.append({
-                        "southWestCorner": {"latitude": min_lat, "longitude": min_lon},
-                        "northEastCorner": {"latitude": max_lat, "longitude": max_lon}
+                        "southWestCorner": {"latitude": min(lat1, lat2), "longitude": min(lon1, lon2)},
+                        "northEastCorner": {"latitude": max(lat1, lat2), "longitude": max(lon1, lon2)}
                     })
-                except:
-                    pass 
+                except: pass
             
         if rectangles:
-            payload = { "avoidAreas": { "rectangles": rectangles } }
-            res = requests.post(url, params=api_params, json=payload)
+            res = requests.post(url, params=api_params, json={"avoidAreas": {"rectangles": rectangles}})
         else:
             res = requests.get(url, params=api_params)
         
@@ -251,144 +229,49 @@ if st.button("🚀 ประมวลผลเส้นทางและวิ�
             summary = route_data['summary']
             dist_km = summary['lengthInMeters'] / 1000
             cost = (dist_km / KM_L) * THB_L
-            dist_delta = dist_km - baseline_km
             
-            # --- Dashboard ---
-            st.subheader("📊 การวิเคราะห์ผลลัพธ์รวม (Route Summary)")
+            # Dashboard
+            st.subheader("📊 การวิเคราะห์ผลลัพธ์รวม")
             c1, c2, c3, c4 = st.columns(4)
-            c1.metric("ระยะทาง (To-Be)", f"{dist_km:.2f} กม.", f"{dist_delta:.2f} กม.", delta_color="inverse")
-            c2.metric("ต้นทุนน้ำมัน", f"฿{cost:.2f}", f"฿{(dist_delta/KM_L)*THB_L:.2f}", delta_color="inverse")
-            c3.metric("CO2 ทั้งเที่ยว", f"{(dist_km/KM_L)*EMISSION_FACTOR:.2f} kg", f"{(dist_delta/KM_L)*EMISSION_FACTOR:.2f} kg", delta_color="inverse")
+            c1.metric("ระยะทางจริง", f"{dist_km:.2f} กม.")
+            c2.metric("ต้นทุนน้ำมัน", f"฿{cost:.2f}")
+            c3.metric("CO2 ทั้งเที่ยว", f"{(dist_km/KM_L)*EMISSION_FACTOR:.2f} kg")
             hh, mm = divmod(summary['travelTimeInSeconds'] // 60, 60)
-            c4.metric("เวลาเดินทางรวม", f"{int(hh)} ชม. {int(mm)} นาที" if hh > 0 else f"{int(mm)} นาที")
+            c4.metric("เวลาเดินทางรวม", f"{int(hh)} ชม. {int(mm)} นาที")
 
-            # --- แผนที่และตาราง ---
-            col_map, col_table = st.columns([1.3, 1.7])
-            with col_map:
-                st.subheader("🗺️ แผนที่เส้นทาง & สภาพจราจร")
-                
-                m = folium.Map(location=coords[0], zoom_start=14, control_scale=True)
-                
-                north_arrow_url = "https://upload.wikimedia.org/wikipedia/commons/e/ec/Compass_rose_n_blank.svg"
-                FloatImage(
-                    north_arrow_url, 
-                    bottom=5,   
-                    left=90,    
-                    width="6%"  
-                ).add_to(m)
-                
-                folium.TileLayer(
-                    tiles=f"https://api.tomtom.com/traffic/map/4/tile/flow/relative0-dark/{{z}}/{{x}}/{{y}}.png?key={API_KEY}",
-                    attr='TomTom Traffic',
-                    name='ปริมาณการจราจร (Traffic Flow)',
-                    overlay=True, control=True, opacity=0.7
-                ).add_to(m)
+            # แสดงแผนที่ Folium
+            st.subheader("🗺️ แผนที่เส้นทาง")
+            m = folium.Map(location=coords[0], zoom_start=14)
+            all_points = [[p['latitude'], p['longitude']] for leg in route_data['legs'] for p in leg['points']]
+            plugins.AntPath(locations=all_points, color="#2980B9").add_to(m)
+            
+            for i, n in enumerate(route_indices[:-1]):
+                loc = edited_df.iloc[n]
+                if n == 0:
+                    folium.Marker([loc['Lat'], loc['Lon']], popup="ฟาร์ม", icon=folium.Icon(color='green', icon='home')).add_to(m)
+                else:
+                    icon_html = f'''<div style="font-size: 11pt; color: white; background-color: #E74C3C; border-radius: 50%; text-align: center; width: 28px; height: 28px; line-height: 28px;">{i}</div>'''
+                    folium.Marker([loc['Lat'], loc['Lon']], icon=folium.DivIcon(html=icon_html)).add_to(m)
 
-                all_points = []
-                for leg in route_data['legs']:
-                    for p in leg['points']: all_points.append([p['latitude'], p['longitude']])
-                
-                plugins.AntPath(
-                    locations=all_points,
-                    delay=800,              
-                    dash_array=[15, 30],   
-                    color="#2980B9",       
-                    pulse_color="#FFFFFF", 
-                    weight=6,
-                    opacity=0.8,
-                    name='ทิศทางการจัดส่ง (AntPath)'
-                ).add_to(m)
-                
-                for i, n in enumerate(route_indices[:-1]):
-                    loc = edited_df.iloc[n]
-                    if n == 0:
-                        folium.Marker([loc['Lat'], loc['Lon']], popup="ฟาร์ม", icon=folium.Icon(color='green', icon='home')).add_to(m)
-                    else:
-                        icon_html = f'''<div style="font-size: 11pt; font-weight: bold; color: white; background-color: #E74C3C; border: 2px solid white; border-radius: 50%; text-align: center; width: 28px; height: 28px; line-height: 24px;">{i}</div>'''
-                        folium.Marker([loc['Lat'], loc['Lon']], popup=f"คิว {i}: {loc['ชื่อสถานที่']}", icon=folium.DivIcon(html=icon_html)).add_to(m)
-                
-                if AVOID_AREA.strip() != "":
-                    for i, line in enumerate(AVOID_AREA.strip().split('\n')):
-                        line = line.strip()
-                        if not line: continue
-                        try:
-                            p1_str, p2_str = line.split(':')
-                            lat1, lon1 = map(float, p1_str.split(','))
-                            lat2, lon2 = map(float, p2_str.split(','))
-                            min_lat, max_lat = min(lat1, lat2), max(lat1, lat2)
-                            min_lon, max_lon = min(lon1, lon2), max(lon1, lon2)
-                            
-                            folium.Rectangle(
-                                bounds=[[min_lat, min_lon], [max_lat, max_lon]],
-                                color='#E74C3C', fill=True, fill_color='#E74C3C', fill_opacity=0.3,
-                                name=f'พื้นที่ห้ามผ่าน {i+1}'
-                            ).add_to(m)
-                        except: pass
-                
-                folium.LayerControl().add_to(m)
-                st_folium(m, width="100%", height=500, returned_objects=[])
-                
-                map_html = io.BytesIO()
-                m.save(map_html, close_file=False)
-                st.download_button(
-                    label="💾 ดาวน์โหลดแผนที่เส้นทาง (Interactive HTML)",
-                    data=map_html.getvalue(),
-                    file_name="MilkRun_Route_Map.html",
-                    mime="text/html",
-                    use_container_width=True
-                )
+            st_folium(m, width="100%", height=500)
 
-            with col_table:
-                st.subheader("📋 ตารางวิเคราะห์คิวงาน (แตะลิงก์เพื่อนำทาง)")
-                schedule = []
-                curr_time = datetime.combine(datetime.today(), DEPART_TIME)
-                for i, n in enumerate(route_indices[:-1]):
-                    t_min, l_dist, f_used, c_leg = 0, 0.0, 0.0, 0.0
-                    loc_data = edited_df.iloc[n]
-                    
-                    if i > 0:
-                        leg = route_data['legs'][i-1]['summary']
-                        t_min = math.ceil(leg['travelTimeInSeconds'] / 60)
-                        l_dist = leg['lengthInMeters'] / 1000
-                        f_used = l_dist / KM_L
-                        c_leg = f_used * EMISSION_FACTOR
-                        curr_time += timedelta(minutes=t_min)
-                    
-                    maps_url = f"https://www.google.com/maps/dir/?api=1&destination={loc_data['Lat']},{loc_data['Lon']}"
-                    
-                    schedule.append({
-                        "คิว": i, 
-                        "สถานที่": loc_data["ชื่อสถานที่"], 
-                        "เวลาที่ถึง": curr_time.strftime("%H:%M"),
-                        "นำทาง": maps_url if i > 0 else None,
-                        "เดินทาง (นาที)": t_min if i > 0 else "-", 
-                        "ระยะทาง (กม.)": f"{l_dist:.2f}" if i > 0 else "-",
-                        "น้ำมัน (ลิตร)": f"{f_used:.2f}" if i > 0 else "-", 
-                        "CO2 (kg)": f"{c_leg:.2f}" if i > 0 else "-"
-                    })
-                    curr_time += timedelta(seconds=SERVICE_TIME_SEC)
+            # ตารางงาน
+            st.subheader("📋 ตารางวิเคราะห์คิวงาน")
+            schedule = []
+            curr_time = datetime.combine(datetime.today(), DEPART_TIME)
+            for i, n in enumerate(route_indices[:-1]):
+                t_min, l_dist = 0, 0.0
+                if i > 0:
+                    leg = route_data['legs'][i-1]['summary']
+                    t_min = math.ceil(leg['travelTimeInSeconds'] / 60)
+                    l_dist = leg['lengthInMeters'] / 1000
+                    curr_time += timedelta(minutes=t_min)
                 
-                df_schedule = pd.DataFrame(schedule)
-                
-                st.dataframe(
-                    df_schedule, 
-                    use_container_width=True, 
-                    hide_index=True,
-                    column_config={
-                        "นำทาง": st.column_config.LinkColumn(
-                            "📍 นำทาง", 
-                            help="คลิกเพื่อเปิดแผนที่ Google Maps", 
-                            display_text="เปิดแผนที่"
-                        )
-                    }
-                )
-                
-                st.markdown("---")
-                buf = io.BytesIO()
-                with pd.ExcelWriter(buf, engine='xlsxwriter') as writer:
-                    df_schedule.to_excel(writer, index=False, sheet_name='MilkRun_Plan')
-                st.download_button("📥 ดาวน์โหลดใบงาน Excel", buf.getvalue(), "MilkRun_Detail_Plan.xlsx", use_container_width=True)
-        else:
-            st.error(f"❌ เกิดข้อผิดพลาดในการดึงข้อมูลจาก TomTom API: {res.text}")
+                schedule.append({
+                    "คิว": i, "สถานที่": edited_df.iloc[n]["ชื่อสถานที่"], 
+                    "เวลาถึง": curr_time.strftime("%H:%M"), "ระยะทาง (กม.)": f"{l_dist:.2f}"
+                })
+                curr_time += timedelta(seconds=SERVICE_TIME_SEC)
+            st.dataframe(pd.DataFrame(schedule), use_container_width=True)
     else:
-        st.error("❌ หาเส้นทางไม่ได้ (น้ำหนักเกินหรือเงื่อนไขเวลาขัดแย้งกัน)")
+        st.error("❌ หาเส้นทางไม่ได้")
