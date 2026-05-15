@@ -17,97 +17,23 @@ import re
 # ==========================================
 st.set_page_config(page_title="Milk Run Optimization", page_icon="🚚", layout="wide")
 st.title("🚚 ระบบวางแผนเส้นทางขนส่งนม (VRP Optimization)")
-st.markdown("ระบบวิเคราะห์เส้นทางอัจฉริยะ พร้อมราคาน้ำมัน Realtime")
+st.markdown("ระบบวิเคราะห์เส้นทางอัจฉริยะ (จัดการข้อมูลราคาน้ำมันด้วยตัวเอง)")
 
 # ==========================================
-# 2. ฟังก์ชันดึงราคาน้ำมัน Realtime (เวอร์ชันเสถียรสูง ยิงตรงบางจาก API)
+# 2. ข้อมูลจำลองราคาน้ำมันมาตรฐาน (ใช้เป็นค่าเริ่มต้นเมื่อผู้ใช้เลือก)
 # ==========================================
-@st.cache_data(ttl=3600)  # แนะนำให้ใส่ cache ไว้ดึงใหม่ทุก 1 ชั่วโมง จะได้ไม่หน่วงหน้าเว็บครับ
-def get_thailand_oil_prices():
-    """
-    ดึงราคาน้ำมันปัจจุบันตรงจาก API บางจาก (เสถียรกว่า ไม่ติด Rate Limit ของ GitHub)
-    และมีระบบสำรองดึงจาก GitHub และราคาดีฟอลต์หากเน็ตหลุด
-    """
-    # ฐานข้อมูลสำรอง (อัปเดตราคาล่าสุดไว้เผื่อเน็ตหลุด)
-    default_oil = {
-        "ดีเซลหมุนเร็ว B7 (Premium)": 44.94,
-        "ดีเซลหมุนเร็ว B7": 32.94,
-        "แก๊สโซฮอล์ 95": 38.55,
-        "แก๊สโซฮอล์ E20": 36.44,
-        "แก๊สโซฮอล์ 91": 38.18,
-        "แก๊สโซฮอล์ E85": 36.14,
-        "เบนซิน 95": 46.44
-    }
-    
-    # --- แผน 1: ดึงตรงจาก API ของบางจาก ประเทศไทย ---
-    try:
-        res = requests.get("https://oil-price.bangchak.co.th/apioilprice2/oilprice?lang=th", timeout=4)
-        if res.status_code == 200:
-            data = res.json()
-            oil_data_list = data[0].get("Data", []) if isinstance(data, list) else data.get("data", [])
-            
-            realtime_oil = {}
-            for item in oil_data_list:
-                oil_name = item.get("OilName", "")
-                oil_price = item.get("Price", item.get("PriceToday", 0))
-                
-                if not oil_price:
-                    continue
-                
-                # ทำการแมปชื่อให้ตรงกับระบบเดิมของคุณ
-                if "พรีเมียม ดีเซล" in oil_name or "Premium" in oil_name:
-                    realtime_oil["ดีเซลหมุนเร็ว B7 (Premium)"] = float(oil_price)
-                elif "ไฮดีเซล B7" in oil_name or "ดีเซล B7" in oil_name:
-                    realtime_oil["ดีเซลหมุนเร็ว B7"] = float(oil_price)
-                elif "แก๊สโซฮอล์ 95" in oil_name:
-                    realtime_oil["แก๊สโซฮอล์ 95"] = float(oil_price)
-                elif "แก๊สโซฮอล์ E20" in oil_name:
-                    realtime_oil["แก๊สโซฮอล์ E20"] = float(oil_price)
-                elif "แก๊สโซฮอล์ 91" in oil_name:
-                    realtime_oil["แก๊สโซฮอล์ 91"] = float(oil_price)
-                elif "แก๊สโซฮอล์ E85" in oil_name:
-                    realtime_oil["แก๊สโซฮอล์ E85"] = float(oil_price)
-
-            if "แก๊สโซฮอล์ 95" in realtime_oil:
-                # เนื่องจากบางจากไม่มีเบนซิน 95 เพียว จึงขอบวกส่วนต่างโดยประมาณเพื่อให้ระบบทำงานได้ครบทุกเมนู
-                realtime_oil["เบนซิน 95"] = realtime_oil["แก๊สโซฮอล์ 95"] + 7.89
-                return realtime_oil, True
-    except:
-        pass
-
-    # --- แผน 2: ถ้าแผน 1 ล่ม ให้สลับมายิง GitHub ตัวเดิมที่คุณใช้ ---
-    try:
-        res = requests.get("https://raw.githubusercontent.com/piti118/thai-oil-price-api/main/oil_price.json", timeout=3)
-        if res.status_code == 200:
-            data = res.json()
-            mapping = {
-                "premium_diesel": "ดีเซลหมุนเร็ว B7 (Premium)",
-                "diesel_b7": "ดีเซลหมุนเร็ว B7",
-                "gasohol_95": "แก๊สโซฮอล์ 95",
-                "gasohol_e20": "แก๊สโซฮอล์ E20",
-                "gasohol_91": "แก๊สโซฮอล์ 91",
-                "gasohol_e85": "แก๊สโซฮอล์ E85",
-                "benzine_95": "เบนซิน 95"
-            }
-            realtime_oil = {}
-            prices_today = data.get("prices", {})
-            for k, v in mapping.items():
-                if k in prices_today:
-                    realtime_oil[v] = float(prices_today[k])
-            
-            if realtime_oil:
-                return realtime_oil, True
-    except:
-        pass
-    
-    # --- แผน 3: ถ้าระบบเน็ตหรือ API พังหมด ให้ใช้ค่าเริ่มต้น ---
-    return default_oil, False
-
-# เรียกใช้งานฟังก์ชัน
-oil_prices, api_success = get_thailand_oil_prices()
+default_oil_prices = {
+    "ดีเซลหมุนเร็ว B7 (Premium)": 44.94,
+    "ดีเซลหมุนเร็ว B7": 32.94,
+    "แก๊สโซฮอล์ 95": 38.55,
+    "แก๊สโซฮอล์ E20": 36.44,
+    "แก๊สโซฮอล์ 91": 38.18,
+    "แก๊สโซฮอล์ E85": 36.14,
+    "เบนซิน 95": 46.44
+}
 
 # ==========================================
-# 3. แผงควบคุมด้านข้าง (Sidebar)
+# 3. แผงควบคุมด้านข้าง (Sidebar - Interface ใหม่แยกค่าย/ประเภท/ราคา)
 # ==========================================
 with st.sidebar:
     st.header("🔑 การเข้าถึงระบบ")
@@ -117,18 +43,36 @@ with st.sidebar:
     DEPART_TIME = st.time_input("เวลาเริ่มออกรถจากฟาร์ม", datetime.strptime("11:20", "%H:%M").time())
     SERVICE_TIME_SEC = st.number_input("เวลาลงนมเฉลี่ยต่อจุด (วินาที)", min_value=0, value=45, step=5)
     
-    st.header("⛽ ต้นทุนและพื้นที่บรรทุก")
-    oil_type = st.selectbox("⛽ เลือกประเภทน้ำมัน", options=list(oil_prices.keys()))
+    st.header("⛽ บริหารจัดการต้นทุนน้ำมัน")
     
-    # ดึงราคาที่ได้มาจากฟังก์ชัน Realtime
-    suggested_price = oil_prices[oil_type]
-    THB_L = st.number_input(f"ราคาน้ำมัน ({oil_type})", min_value=1.0, value=float(suggested_price), step=0.1)
+    # 1. เลือกค่ายปั๊มน้ำมัน
+    station_brand = st.selectbox(
+        "🏬 เลือกค่ายปั๊มน้ำมัน",
+        options=["PTT Station (ปตท.)", "Bangchak (บางจาก)", "Shell (เชลล์)", "Esso (เอสโซ่)", "PT (พีที)", "อื่นๆ"]
+    )
     
-    if api_success:
-        st.success("✅ เชื่อมต่อราคาน้ำมัน Realtime สำเร็จ")
-    else:
-        st.warning("⚠️ ใช้ราคาสำรอง (เนื่องจากต่อ API ไม่ได้)")
+    # 2. เลือกประเภทน้ำมัน
+    oil_type = st.selectbox(
+        "⛽ เลือกประเภทน้ำมัน", 
+        options=list(default_oil_prices.keys())
+    )
+    
+    # ดึงค่าเริ่มต้นอ้างอิงมาแสดงก่อน
+    initial_price = default_oil_prices[oil_type]
+    
+    # 3. ช่องกรอกราคาปัจจุบัน (ผู้ใช้สามารถแก้ไขตัวเลขตรงนี้ให้ตรงกับหน้าปั๊มจริงได้เลย)
+    THB_L = st.number_input(
+        f"💰 ระบุราคาน้ำมันปัจจุบัน (บาท/ลิตร)", 
+        min_value=1.0, 
+        max_value=100.0,
+        value=float(initial_price), 
+        step=0.1,
+        help="คุณสามารถปรับเปลี่ยนตัวเลขนี้ให้ตรงกับราคาหน้าปั๊มที่คุณเลือกได้ทันที"
+    )
+    
+    st.info(f"📋 ปั๊ม: {station_brand}\n\n⛽ น้ำมัน: {oil_type}\n\n💵 คำนวณที่ราคา: {THB_L:.2f} บาท")
 
+    st.header("📦 พื้นที่บรรทุก")
     KM_L = st.number_input("อัตราสิ้นเปลือง (km/L)", min_value=1.0, value=10.0, step=0.5)
     NUM_COOLERS = st.number_input("จำนวนถัง (ใบ)", min_value=1, value=2)
     ICE_PER_COOLER = st.number_input("น้ำแข็ง/ถัง (L)", min_value=0.0, value=75.0)
@@ -149,7 +93,6 @@ uploaded_file = st.file_uploader("📂 อัปโหลดไฟล์รา�
 if uploaded_file is not None:
     try:
         df = pd.read_csv(uploaded_file) if uploaded_file.name.endswith('.csv') else pd.read_excel(uploaded_file)
-        # เติมค่าว่างด้วย 0 เพื่อกันโครงสร้าง DataFrame พังเวลาผู้ใช้ส่งแถวว่างมา
         df = df.fillna(0)
         edited_df = st.data_editor(df, num_rows="dynamic", height=250, use_container_width=True)
     except Exception as e:
@@ -176,7 +119,6 @@ def haversine_distance(coord1, coord2):
 # ==========================================
 if st.button("🚀 ประมวลผลเส้นทาง", type="primary", use_container_width=True):
     demands = []
-    # ป้องกันบั๊กกรณีลูกค้าจัดเรียงลำดับใหม่ใน data_editor
     edited_df = edited_df.reset_index(drop=True)
     
     for i, row in edited_df.iterrows():
