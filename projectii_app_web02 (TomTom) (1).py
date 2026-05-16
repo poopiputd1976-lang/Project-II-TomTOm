@@ -11,6 +11,14 @@ from streamlit_folium import st_folium
 import pandas as pd
 import io
 
+# ฟังก์ชันแปลงค่าปลอดภัย ป้องกันแอปพังจากข้อมูลพิมพ์ผิด
+def safe_float(val):
+    try:
+        if pd.isna(val): return 0.0
+        return float(val)
+    except:
+        return 0.0
+
 @st.cache_data(ttl=21600) 
 def fetch_today_oil_price():
     try:
@@ -37,9 +45,9 @@ def fetch_today_oil_price():
 # ==========================================
 # 1. ตั้งค่าหน้าเพจ UI
 # ==========================================
-st.set_page_config(page_title="Time-Based Milk Run", page_icon="🚚", layout="wide")
-st.title("🚚 ระบบจัดเส้นทางจัดส่งนมเน้นเวลา (Time-Based VRP)")
-st.markdown("ระบบวิเคราะห์เส้นทางอัจฉริยะ **มุ่งเน้นการทำเวลาและความรวดเร็ว** โดยไม่คิดข้อจำกัดด้านความจุรถ")
+st.set_page_config(page_title="Hybrid Milk Run Optimization", page_icon="🚚", layout="wide")
+st.title("🚚 ระบบวางแผนเส้นทางจัดส่งนมแบบผสมผสาน (Hybrid VRP: Capacity + Time)")
+st.markdown("ระบบวิเคราะห์เส้นทางอัจฉริยะขั้นสูง คำนวณความจุรถ ควบคุมเวลาส่งมอบ และเลือกโหมดการกระจายกองรถได้ตามใจชอบ")
 
 # ==========================================
 # 2. แผงควบคุมด้านข้าง (Sidebar)
@@ -62,8 +70,16 @@ with st.sidebar:
         st.warning("⚠️ ไม่สามารถดึงข้อมูลราคา Real-time ได้ (ใช้ราคาประเมิน)")
         THB_L = st.number_input("ราคาน้ำมัน (THB/L)", min_value=1.0, value=35.0, step=0.5, format="%.2f")
 
-    # จัดการกองรถขนส่ง (เฉพาะประเภทรถและอัตรากินน้ำมัน ไม่คิดความจุ)
-    st.header("🚛 จัดการกองรถขนส่ง (Fleet Setup)")
+    # ✨ ระบบจัดการกองรถและปุ่มจูนความยืดหยุ่น (Fleet Management)
+    st.header("🚛 จัดการกองรถขนส่ง")
+    
+    # 🎯 ปุ่มเลือกโหมดความยืดหยุ่นในการกระจายงาน
+    FLEET_MODE = st.radio(
+        "🎯 เลือกโหมดการทำงานของกองรถ",
+        ["🟢 เน้นประหยัดต้นทุนที่สุด (Cost Saving)", "🔵 บังคับเฉลี่ยงานให้รถทุกคัน (Balanced Workload)"],
+        index=0,
+        help="โหมดประหยัดจะใช้รถให้น้อยคันที่สุด ส่วนโหมดเฉลี่ยงานจะบังคับให้รถทุกคันออกไปช่วยกันวิ่งเพื่อให้ส่งเสร็จไว"
+    )
     
     if 'num_vehicles' not in st.session_state:
         st.session_state.num_vehicles = 2
@@ -76,20 +92,27 @@ with st.sidebar:
         if st.button("➖ ลดรถ 1 คัน", use_container_width=True) and st.session_state.num_vehicles > 1:
             st.session_state.num_vehicles -= 1
             
-    st.caption(f"ปัจจุบันมีรถสแตนด์บายทั้งหมด: **{st.session_state.num_vehicles}** คัน")
+    st.caption(f"ปัจจุบันมีรถทั้งหมด: **{st.session_state.num_vehicles}** คัน")
     
     vehicles_data = []
     for v_idx in range(st.session_state.num_vehicles):
         with st.expander(f"🚚 รถคันที่ {v_idx + 1}", expanded=(v_idx == 0)):
             v_mode = st.selectbox(f"ประเภทรถ คันที่ {v_idx+1}", ["truck", "van", "car", "motorcycle"], key=f"mode_{v_idx}")
             v_kml = st.number_input(f"อัตราสิ้นเปลือง (km/L) คันที่ {v_idx+1}", min_value=1.0, value=10.0, step=0.5, key=f"kml_{v_idx}")
+            v_coolers = st.number_input(f"จำนวนถัง (ใบ) คันที่ {v_idx+1}", min_value=1, value=2, step=1, key=f"coolers_{v_idx}")
+            v_ice = st.number_input(f"น้ำแข็ง/ถัง (L) คันที่ {v_idx+1}", min_value=0.0, value=75.0, step=1.0, key=f"ice_{v_idx}")
+            
+            v_capacity = int((450 - v_ice) * v_coolers)
+            st.info(f"ความจุสุทธิ: {v_capacity} L")
             
             vehicles_data.append({
                 "id": v_idx,
                 "mode": v_mode,
-                "km_l": v_kml
+                "km_l": v_kml,
+                "capacity": v_capacity
             })
             
+    DEAD_SPACE_RATIO = 0.15 
     EMISSION_FACTOR = 2.70757206 
     
     st.header("🚧 ข้อจำกัดเส้นทาง")
@@ -129,12 +152,24 @@ def haversine_distance(coord1, coord2):
     return int(R * (2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))))
 
 # ==========================================
-# 4. ประมวลผล (Optimization Core - เน้นเวลาเป็นหลัก)
+# 4. ประมวลผล (Hybrid Optimization Core)
 # ==========================================
 st.markdown("---")
-if st.button("🚀 ประมวลผลเส้นทางเน้นเวลาการจัดส่ง", type="primary", use_container_width=True):
+if st.button("🚀 ประมวลผลเส้นทางแบบ Hybrid (คิดทั้งความจุและเวลา)", type="primary", use_container_width=True):
+    demands = []
+    for i, row in edited_df.iterrows():
+        if i == 0: 
+            demands.append(0)
+            continue
+        vol = (safe_float(row.get("200cc", 0)) * 0.2) + (safe_float(row.get("2L", 0)) * 2.0) + (safe_float(row.get("5L", 0)) * 5.0)
+        demands.append(math.ceil(vol * (1.0 + DEAD_SPACE_RATIO)))
+    
+    total_fleet_capacity = sum([v['capacity'] for v in vehicles_data])
+    if sum(demands) > total_fleet_capacity:
+        st.error(f"❌ ปริมาณนมรวม ({sum(demands)} L) เกินความจุรวมของกองรถทั้งหมดที่มี ({total_fleet_capacity} L)")
+        st.stop()
         
-    with st.spinner('กำลังคำนวณเส้นทางเพื่อทำเวลาที่เร็วที่สุด...'):
+    with st.spinner('กำลังคำนวณแบบผสมผสาน (เช็คความจุ + ล็อกเวลา + คำนวณตามโหมดกองรถ)...'):
         coords = edited_df[['Lat', 'Lon']].values.tolist()
         dist_matrix = [[haversine_distance(coords[i], coords[j]) for j in range(len(coords))] for i in range(len(coords))]
         
@@ -142,7 +177,7 @@ if st.button("🚀 ประมวลผลเส้นทางเน้นเ�
         manager = pywrapcp.RoutingIndexManager(len(coords), num_vehicles, 0)
         routing = pywrapcp.RoutingModel(manager)
         
-        # ฟังก์ชันคิดเวลาเดินทาง (อิงความเร็วเฉลี่ยประเมิน 30 กม./ชม. + Service Time)
+        # 1. ตั้งค่ามิติเรื่อง เวลา (Time Dimension)
         def time_callback(from_index, to_index):
             d = dist_matrix[manager.IndexToNode(from_index)][manager.IndexToNode(to_index)]
             return int((d / 1000) / 30 * 60) + (math.ceil(SERVICE_TIME_SEC / 60) if from_index != 0 else 0)
@@ -150,16 +185,17 @@ if st.button("🚀 ประมวลผลเส้นทางเน้นเ�
         transit_idx = routing.RegisterTransitCallback(time_callback)
         routing.SetArcCostEvaluatorOfAllVehicles(transit_idx)
         
-        # สร้างมิติการคำนวณเรื่องเวลา (Time Dimension)
         routing.AddDimension(transit_idx, 2880, 2880, False, "Time")
         time_dim = routing.GetDimensionOrDie("Time")
         
-        # ตั้งเวลาออกรถของทุกคัน
+        # ✨ ลอจิกเปิด-ปิดโหมดเฉลี่ยงานตามปุ่มวิทยุใน Sidebar
+        if "🔵 บังคับเฉลี่ยงาน" in FLEET_MODE:
+            time_dim.SetGlobalSpanCostCoefficient(100) # บังคับให้สับงานแบ่งกันวิ่งเท่าๆ กันทันที
+        
         for v_idx in range(num_vehicles):
-            routing.Start(v_idx)
             time_dim.CumulVar(routing.Start(v_idx)).SetValue(DEPART_TIME.hour * 60 + DEPART_TIME.minute)
         
-        # ใส่เงื่อนไขเวลาเปิด-ปิด (Time Windows) ของแต่ละจุด โดยไม่มีเรื่องความจุรถมาเกี่ยวเลย
+        # ใส่ Time Windows ของลูกค้าแต่ละราย
         for i, row in edited_df.iterrows():
             idx = manager.NodeToIndex(i)
             s = time_to_min(row.get("เริ่มรับได้")) or 0
@@ -168,6 +204,13 @@ if st.button("🚀 ประมวลผลเส้นทางเน้นเ�
             if i != 0 and e < 2880:
                 time_dim.SetCumulVarSoftUpperBound(idx, e, 100)
 
+        # 2. ตั้งค่ามิติเรื่อง ความจุรถ (Capacity Dimension)
+        def demand_callback(idx): return demands[manager.IndexToNode(idx)]
+        demand_idx = routing.RegisterUnaryTransitCallback(demand_callback)
+        fleet_capacities = [v['capacity'] for v in vehicles_data]
+        routing.AddDimensionWithVehicleCapacity(demand_idx, 0, fleet_capacities, True, "Capacity")
+
+        # ตั้งค่าค้นหาคำตอบที่ดีที่สุด
         search_params = pywrapcp.DefaultRoutingSearchParameters()
         search_params.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.AUTOMATIC
         search_params.local_search_metaheuristic = routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
@@ -176,10 +219,7 @@ if st.button("🚀 ประมวลผลเส้นทางเน้นเ�
 
     if solution:
         fleet_results = {}
-        total_dist_km = 0.0
-        total_cost = 0.0
-        total_co2 = 0.0
-        total_time_sec = 0
+        total_dist_km, total_cost, total_co2, total_time_sec = 0.0, 0.0, 0.0, 0
         
         rectangles = []
         if AVOID_AREA.strip() != "":
@@ -209,7 +249,7 @@ if st.button("🚀 ประมวลผลเส้นทางเน้นเ�
                 
             v_info = vehicles_data[v_idx]
             
-            # เรียก TomTom API นำทางจริง
+            # เรียก TomTom API นำทางจริงพร้อมกั้นพื้นที่ห้ามผ่าน
             url = f"https://api.tomtom.com/routing/1/calculateRoute/{':'.join([f'{coords[n][0]},{coords[n][1]}' for n in route_indices])}/json"
             api_params = {"key": API_KEY, "travelMode": v_info['mode']}
             
@@ -244,19 +284,19 @@ if st.button("🚀 ประมวลผลเส้นทางเน้นเ�
                 st.error(f"❌ TomTom API ขัดข้องที่รถคันที่ {v_idx+1}: {res.text}")
                 st.stop()
 
-        # --- Dashboard รวมกองรถ ---
-        st.subheader("📊 ผลลัพธ์รวมด้านเวลาและระยะทาง (Fleet Summary)")
+        # --- Dashboard ---
+        st.subheader("📊 ผลวิเคราะห์ภาพรวมระดับ Hybrid (Fleet Summary)")
         c1, c2, c3, c4 = st.columns(4)
-        c1.metric("ระยะทางรวมทุกคัน", f"{total_dist_km:.2f} กม.")
-        c2.metric("ต้นทุนน้ำมันรวม", f"฿{total_cost:.2f}")
-        c3.metric("จำนวนรถที่ถูกใช้งานจริง", f"{len(fleet_results)} คัน / {num_vehicles} คัน")
+        c1.metric("ระยะทางรวมกองรถ", f"{total_dist_km:.2f} กม.")
+        c2.metric("ต้นทุนน้ำมันรวมทั้งหมด", f"฿{total_cost:.2f}")
+        c3.metric("รถที่หยิบมาใช้งานจริง", f"{len(fleet_results)} คัน / {num_vehicles} คัน")
         hh, mm = divmod(total_time_sec // 60, 60)
-        c4.metric("เวลาเดินทางรวม", f"{int(hh)} ชม. {int(mm)} นาที" if hh > 0 else f"{int(mm)} นาที")
+        c4.metric("เวลาปฏิบัติงานรวม", f"{int(hh)} ชม. {int(mm)} นาที" if hh > 0 else f"{int(mm)} นาที")
 
         # --- แผนที่และตาราง ---
         col_map, col_table = st.columns([1.3, 1.7])
         with col_map:
-            st.subheader("🗺️ แผนที่เส้นทางทำเวลา")
+            st.subheader("🗺️ แผนที่กองรถระบบผสมผสาน")
             m = folium.Map(location=coords[0], zoom_start=12, control_scale=True)
             FloatImage("https://upload.wikimedia.org/wikipedia/commons/e/ec/Compass_rose_n_blank.svg", bottom=5, left=90, width="6%").add_to(m)
             
@@ -297,17 +337,18 @@ if st.button("🚀 ประมวลผลเส้นทางเน้นเ�
             st_folium(m, width="100%", height=520, returned_objects=[])
 
         with col_table:
-            st.subheader("📋 ใบงานคิวจัดส่ง (เน้นเวลาถึงเป้าหมาย)")
+            st.subheader("📋 ใบงานและคิวงานสัญญาลูกค้า (Hybrid Plan)")
             
             tabs = st.tabs([f"🚚 คันที่ {v_idx+1} ({res_data['config']['mode']})" for v_idx, res_data in fleet_results.items()])
             
             for tab_i, (v_idx, res_data) in enumerate(fleet_results.items()):
                 with tabs[tab_i]:
-                    st.markdown(f"**ระยะทางเที่ยวนี้:** {res_data['dist_km']:.2f} กม. | **ค่าน้ำมันประเมิน:** ฿{res_data['cost']:.2f}")
+                    st.markdown(f"**ระยะทางเที่ยวนี้:** {res_data['dist_km']:.2f} กม. | **ค่าน้ำมัน:** ฿{res_data['cost']:.2f} | **ความจุรถ:** {res_data['config']['capacity']} L")
                     
                     schedule = []
                     curr_time = datetime.combine(datetime.today(), DEPART_TIME)
                     r_indices = res_data['indices']
+                    v_loaded_milk = 0 # ตัวแปรไว้นับปริมาณนมสะสมบนรถ
                     
                     for i in range(len(r_indices)):
                         n = r_indices[i]
@@ -326,12 +367,16 @@ if st.button("🚀 ประมวลผลเส้นทางเน้นเ�
                         if i == 0: display_name = f"{loc_data['ชื่อสถานที่']} (จุดสตาร์ท)"
                         elif i == len(r_indices) - 1: display_name = f"{loc_data['ชื่อสถานที่']} (กลับเข้าฟาร์ม)"
                         else: display_name = loc_data["ชื่อสถานที่"]
+                        
+                        node_demand = demands[n]
+                        v_loaded_milk += node_demand
 
                         schedule.append({
                             "คิว": i if i < len(r_indices)-1 else "🏁", 
                             "สถานที่": display_name, 
                             "เวลาที่ถึง": curr_time.strftime("%H:%M"),
-                            "กำหนดส่งก่อน": loc_data.get("ต้องส่งก่อน", "-") if i > 0 and i < len(r_indices)-1 else "-",
+                            "ต้องส่งก่อน": loc_data.get("ต้องส่งก่อน", "-") if i > 0 and i < len(r_indices)-1 else "-",
+                            "นมที่ส่งเที่ยวนี้ (L)": node_demand if i > 0 and i < len(r_indices)-1 else "-",
                             "นำทาง": maps_url if i > 0 else None,
                             "เวลาเดินทาง (นาที)": t_min if i > 0 else "-", 
                             "ระยะทางช่วง (กม.)": f"{l_dist:.2f}" if i > 0 else "-"
@@ -340,6 +385,7 @@ if st.button("🚀 ประมวลผลเส้นทางเน้นเ�
                         if i < len(r_indices) - 1:
                             curr_time += timedelta(seconds=SERVICE_TIME_SEC)
                     
+                    st.caption(f"📦 น้ำหนักสินค้ารวมที่บรรทุกบนรถคันนี้: **{v_loaded_milk} L** (ความจุสูงสุด {res_data['config']['capacity']} L)")
                     df_schedule = pd.DataFrame(schedule)
                     st.dataframe(
                         df_schedule, use_container_width=True, hide_index=True, key=f"tbl_{v_idx}",
@@ -351,6 +397,6 @@ if st.button("🚀 ประมวลผลเส้นทางเน้นเ�
                     buf = io.BytesIO()
                     with pd.ExcelWriter(buf, engine='xlsxwriter') as writer:
                         df_schedule.to_excel(writer, index=False, sheet_name=f'Vehicle_{v_idx+1}')
-                    st.download_button(f"📥 ดาวน์โหลดใบงาน คันที่ {v_idx+1} (Excel)", buf.getvalue(), f"MilkRun_Time_Plan_{v_idx+1}.xlsx", key=f"dl_{v_idx}", use_container_width=True)
+                    st.download_button(f"📥 ดาวน์โหลดใบงาน คันที่ {v_idx+1} (Excel)", buf.getvalue(), f"MilkRun_Hybrid_Plan_{v_idx+1}.xlsx", key=f"dl_{v_idx}", use_container_width=True)
     else:
-        st.error("❌ ไม่สามารถคำนวณเส้นทางได้เนื่องจากเงื่อนไขเวลาลูกค้าขัดแย้งกันอย่างรุนแรง")
+        st.error("❌ ไม่สามารถจัดเส้นทางได้: น้ำหนักรวมล้นคลังรถทั้งหมด หรือเงื่อนไขเวลาลูกค้าขัดแย้งกันรุนแรงเกินไป")
