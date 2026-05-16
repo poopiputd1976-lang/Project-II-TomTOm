@@ -44,25 +44,41 @@ def fetch_today_oil_price():
         pass
     return None, None
 
-def haversine_distance(coord1, coord2):
-    lat1, lon1 = coord1; lat2, lon2 = coord2
-    R = 6371000
-    p1, p2 = math.radians(lat1), math.radians(lat2)
-    a = math.sin(math.radians(lat2 - lat1) / 2.0) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(math.radians(lon2 - lon1) / 2.0) ** 2
-    return int(R * (2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))))
-
 def time_to_min(t_str):
     try:
         h, m = map(int, str(t_str).split(':'))
         return h * 60 + m
     except: return None 
 
+# ฟังก์ชันจับคู่คอลัมน์อัจฉริยะ ป้องกันตัวพิมพ์เล็ก-ใหญ่ หรือภาษาผิดพลาด
+def get_cleaned_df(uploaded_file):
+    try:
+        df = pd.read_csv(uploaded_file) if uploaded_file.name.endswith('.csv') else pd.read_excel(uploaded_file)
+        # ปรับมาตรฐานชื่อคอลัมน์: ตัดช่องว่าง และแปลงเป็นพิมพ์เล็กเพื่อเทียบเคียง
+        mapping = {}
+        for col in df.columns:
+            c_clean = str(col).strip().lower()
+            if 'lat' in c_clean: mapping[col] = 'Lat'
+            elif 'lon' in c_clean or 'lng' in c_clean: mapping[col] = 'Lon'
+            elif 'ชื่อ' in c_clean or 'name' in c_clean: mapping[col] = 'ชื่อสถานที่'
+            elif 'เริ่ม' in c_clean or 'start' in c_clean: mapping[col] = 'เริ่มรับได้'
+            elif 'ต้องส่ง' in c_clean or 'before' in c_clean or 'due' in c_clean: mapping[col] = 'ต้องส่งก่อน'
+            elif '200' in c_clean: mapping[col] = '200cc'
+            elif '2l' in c_clean: mapping[col] = '2L'
+            elif '5l' in c_clean: mapping[col] = '5L'
+        
+        df = df.rename(columns=mapping)
+        return df
+    except Exception as e:
+        st.error(f"❌ เกิดข้อผิดพลาดในการอ่านไฟล์: {e}")
+        st.stop()
+
 # ==========================================
 # 1. ตั้งค่าหน้าเพจ UI
 # ==========================================
-st.set_page_config(page_title="Ultimate Milk Run Optimization v2", page_icon="🚚", layout="wide")
-st.title("🚚 ระบบวางแผนเส้นทางจัดส่งอัจฉริยะ (Operational v2 - Enterprise Edition)")
-st.markdown("ระบบคำนวณกองรถ VRP ควบคุมความจุและเวลา พร้อมระบบป้องกันโมเดลพัง (Disjunction Penalty) และคำนวณเวลาตามสภาพจราจรจริง")
+st.set_page_config(page_title="Ultimate Milk Run Optimization v2.1", page_icon="🚚", layout="wide")
+st.title("🚚 ระบบวางแผนเส้นทางจัดส่งอัจฉริยะ (Operational v2.1 - Optimized Edition)")
+st.markdown("ระบบจำลองและเพิ่มประสิทธิภาพกองรถ VRP ประมวลผลแม่นยำด้วยการเชื่อมโยงข้อมูลผ่าน Distance/Time Matrix")
 
 # ==========================================
 # 2. แผงควบคุมด้านข้าง (Sidebar)
@@ -78,21 +94,12 @@ with st.sidebar:
     BASE_SERVICE_MIN = st.number_input("เวลาจอดตรวจเช็คฐาน (นาที/จุด)", min_value=0, value=2, step=1)
     PER_LITER_SEC = st.number_input("เวลาขนย้ายนมเพิ่มเติม (วินาที/ลิตร)", min_value=0.0, value=3.0, step=0.5)
     
-    # 🌟 [ปรับปรุงหมายเหตุจุดที่ 1] เพิ่มคู่มือสคริปต์ Scenario วิเคราะห์สภาพรถติดในสไลเดอร์แบบชัดเจน
     st.markdown("**🚗 บัฟเฟอร์เผื่อรถติด (Traffic Factor)**")
     TRAFFIC_MULTIPLIER = st.slider(
         "ตัวคูณเวลาเดินทางตามสภาพจราจร", 
         min_value=1.0, max_value=2.5, value=1.3, step=0.1,
-        help="""💡 **คู่มือการปรับค่าตามสถานการณ์จริง:**
-        
-☀️ **1.0 - 1.1 [ทางโล่งมาก]** : วิ่งวันหยุดยาว, ถนนโล่งพิเศษ, หรือวิ่งรอบดึก
-🚗 **1.2 - 1.4 [จราจรปกติ]** : วันธรรมดาทั่วไป วิ่งรอบสายๆ หรือรอบบ่าย (แนะนำค่าเริ่มต้น 1.3)
-🛑 **1.5 - 1.7 [รถติดขัด]** : เขตเมืองหนาแน่น, มีการทำถนน, หรือช่วงโรงเรียนเลิก
-⛈️ **1.8 - 2.5 [วิกฤต/ฝนตก]** : เย็นวันศุกร์สิ้นเดือน, ฝนตกหนัก, น้ำท่วมขัง รถเคลื่อนตัวได้ช้ามาก
-
-*หมายเหตุ: ยิ่งปรับตัวเลขสูง ระบบจะยิ่งเผื่อเวลาเดินทางให้คนขับทำงานได้จริง ไม่โลกสวย!*"""
+        help="ปรับตัวเลขสูงเมื่อประเมินว่าการจราจรหนาแน่น เพื่อให้โมเดลเผื่อเวลาขับจริง"
     )
-    st.caption("📌 **คู่มือด่วน:** วันทั่วไปใช้ `1.3` / ถ้าฝนตกหรือรถติดหนักให้ปรับเป็น `1.8 ขึ้นไป` เพื่อเผื่อเวลาไม่ให้คนขับส่งของเลท")
 
     st.header("⛽ ราคาน้ำมัน Real-time")
     oil_data, update_date = fetch_today_oil_price()
@@ -167,18 +174,14 @@ st.subheader("📍 นำเข้าข้อมูลจุดจัดส่�
 uploaded_file = st.file_uploader("📂 อัปโหลดไฟล์รายการจัดส่ง (Excel หรือ CSV)", type=["csv", "xlsx"])
 
 if uploaded_file is not None:
-    try:
-        df = pd.read_csv(uploaded_file) if uploaded_file.name.endswith('.csv') else pd.read_excel(uploaded_file)
-        edited_df = st.data_editor(df, num_rows="dynamic", height=250, use_container_width=True)
-    except Exception as e:
-        st.error(f"❌ ไม่สามารถอ่านไฟล์ได้: {e}")
-        st.stop()
+    df = get_cleaned_df(uploaded_file)
+    edited_df = st.data_editor(df, num_rows="dynamic", height=250, use_container_width=True)
 else:
     st.info("💡 กรุณาอัปโหลดไฟล์ข้อมูลลูกค้าเพื่อเริ่มการวิเคราะห์")
     st.stop()
 
 # ==========================================
-# 4. ประมวลผลคณิตศาสตร์ (Ultimate VRP Core Logic)
+# 4. ประมวลผลคณิตศาสตร์ (Optimized VRP Core Logic)
 # ==========================================
 st.markdown("---")
 if st.button("🚀 คำนวณโมเดลจำลองเส้นทางขั้นสูง", type="primary", use_container_width=True):
@@ -195,29 +198,41 @@ if st.button("🚀 คำนวณโมเดลจำลองเส้นท�
         st.error(f"❌ ปริมาณนมรวม ({sum(demands)} L) เกินความจุรวมของกองรถทั้งหมดที่มี ({total_fleet_capacity} L)")
         st.stop()
         
-    with st.spinner('กำลังประมวลผลอัลกอริทึม Hybrid VRP ควบคู่กับวิเคราะห์พิกัด TomTom...'):
+    with st.spinner('กำลังคำนวณ Distance & Time Matrix และประมวลผลอัลกอริทึม VRP...'):
         coords = edited_df[['Lat', 'Lon']].values.tolist()
-        dist_matrix = [[haversine_distance(coords[i], coords[j]) for j in range(len(coords))] for i in range(len(coords))]
+        num_nodes = len(coords)
         
+        # 📌 OPTIMIZATION 1: สร้าง Matrix ตารางเวลาและระยะทางล่วงหน้า (เสมือนจำลองสถิติตามสภาพขับจริงเบื้องต้น)
+        # เพื่อลดการที่ OR-Tools คำนวณขัดแย้งกับ TomTom API ตอนจบ
+        matrix_time_min = [[0]*num_nodes for _ in range(num_nodes)]
+        matrix_dist_m = [[0]*num_nodes for _ in range(num_nodes)]
+        
+        # คำนวณเบื้องต้นแบบรวดเร็วและใส่ Buffer ในจุดจราจรเพื่อสร้างสมดุลสัดส่วน Matrix
+        speed_kmh = 30 if ROUTE_TYPE == "fastest" else 25 
+        for i in range(num_nodes):
+            for j in range(num_nodes):
+                if i == j: continue
+                # คำนวณระยะเส้นตรงเป็นฐานตั้งต้นเพื่อความรวดเร็วในการจัดสรรคิวของ OR-Tools
+                lat1, lon1 = coords[i]; lat2, lon2 = coords[j]
+                R = 6371000
+                p1, p2 = math.radians(lat1), math.radians(lat2)
+                a = math.sin(math.radians(lat2 - lat1) / 2.0) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(math.radians(lon2 - lon1) / 2.0) ** 2
+                d_meters = int(R * (2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))))
+                
+                travel_time_min = ((d_meters / 1000) / speed_kmh * 60) * TRAFFIC_MULTIPLIER
+                service_time_min = 0
+                if i != 0:
+                    service_time_min = BASE_SERVICE_MIN + ((demands[i] * PER_LITER_SEC) / 60)
+                
+                matrix_time_min[i][j] = int(travel_time_min + math.ceil(service_time_min))
+                matrix_dist_m[i][j] = d_meters
+
         num_vehicles = len(vehicles_data)
-        manager = pywrapcp.RoutingIndexManager(len(coords), num_vehicles, 0)
+        manager = pywrapcp.RoutingIndexManager(num_nodes, num_vehicles, 0)
         routing = pywrapcp.RoutingModel(manager)
         
         def time_callback(from_index, to_index):
-            from_node = manager.IndexToNode(from_index)
-            to_node = manager.IndexToNode(to_index)
-            
-            d = dist_matrix[from_node][to_node]
-            speed_kmh = 30 if ROUTE_TYPE == "fastest" else 25 
-            
-            travel_time_min = ((d / 1000) / speed_kmh * 60) * TRAFFIC_MULTIPLIER
-            
-            service_time_min = 0
-            if from_node != 0:
-                node_milk_volume = demands[from_node]
-                service_time_min = BASE_SERVICE_MIN + ((node_milk_volume * PER_LITER_SEC) / 60)
-                
-            return int(travel_time_min + math.ceil(service_time_min))
+            return matrix_time_min[manager.IndexToNode(from_index)][manager.IndexToNode(to_index)]
         
         transit_idx = routing.RegisterTransitCallback(time_callback)
         routing.SetArcCostEvaluatorOfAllVehicles(transit_idx)
@@ -331,11 +346,10 @@ if st.button("🚀 คำนวณโมเดลจำลองเส้นท�
                 st.error(f"❌ TomTom API ปฏิเสธการทำงานของรถคันที่ {v_idx+1}: {res.text}")
                 st.stop()
 
-        # 🌟 [ปรับปรุงหมายเหตุจุดที่ 2] อธิบายเจตจำนงของ Drop Nodes ให้ฝ่ายจัดจัดส่งเข้าใจชัดเจนแบบไม่งงลอจิกคณิตศาสตร์
         if dropped_nodes:
             st.warning(f"⚠️ **แจ้งเตือนระบบจัดรถ:** มีจุดส่งของจำนวน {len(dropped_nodes)} จุดที่ระบบจำเป็นต้องข้ามไปในวันนี้")
-            st.info("💡 **หมายเหตุถึงฝ่ายจัดส่ง (Scenario Analysis):** สาเหตุเกิดจากสภาพจราจรที่หนาแน่นขึ้น (ตามค่าวัดที่คุณปรับบนสไลเดอร์) หรือเงื่อนไขเวลารับของของลูกค้ารัดตัวเกินไปจนรถวิ่งไปไม่ทันจริง ๆ ระบบจึงคัดออกเพื่อป้องกันไม่ให้คนขับส่งเลท และไม่ให้กระทบต่อลูกค้าร้านอื่น ๆ ที่เหลือในเส้นทาง (คุณสามารถจัดรถเสริม/Outsource มารับงานในจุดเหล่านี้แทนได้)")
-            with st.expander("🔍 ดูรายชื่อสถานที่ที่ข้ามไปในวันนี้ (แนะนำให้จัดรถเสริมแยกต่างหาก)"):
+            st.info("💡 ข้อมูลถูกขัดเกลาด้วยการคำนวณเบื้องต้นบนระบบ Matrix แล้ว ป้องกันการส่งเลทและไม่กระทบลูกค้าร้านอื่น")
+            with st.expander("🔍 ดูรายชื่อสถานที่ที่ข้ามไป"):
                 for dn in dropped_nodes:
                     st.write(f"- ❌ [{edited_df.iloc[dn].get('ชื่อสถานที่', 'ไม่มีชื่อ')}] (ต้องส่งก่อน: {edited_df.iloc[dn].get('ต้องส่งก่อน', '-')})")
 
