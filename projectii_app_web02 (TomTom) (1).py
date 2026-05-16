@@ -186,7 +186,7 @@ else:
 st.markdown("---")
 if st.button("🚀 คำนวณโมเดลจำลองเส้นทางขั้นสูง", type="primary", use_container_width=True):
     
-    # 📌 [FIX 1] ป้องกันปัญหาตารางแหว่งจากการลบ/เพิ่มข้อมูลใน data_editor ให้เคลียร์ Index ใหม่ทั้งหมดก่อนนำไปใช้
+    # [FIX] ป้องกันปัญหาการกดเพิ่ม/ลบแถวบน UI แล้ว Index แหว่ง/ไม่ตรงกับข้อมูลใน Or-Tools
     edited_df = edited_df.reset_index(drop=True)
     
     demands = []
@@ -397,7 +397,6 @@ if st.button("🚀 คำนวณโมเดลจำลองเส้นท�
                         folium.Marker([loc['Lat'], loc['Lon']], popup=f"รถคันที่ {v_idx+1} คิวที่ {q_i}: {loc['ชื่อสถานที่']}", icon=folium.DivIcon(html=icon_html)).add_to(m)
 
             folium.LayerControl().add_to(m)
-            # 📌 [FIX 2] เพิ่ม key เพื่อบังคับให้แผนที่เรนเดอร์ใหม่ทุกรอบที่กดประมวลผล
             st_folium(m, width="100%", height=520, returned_objects=[], key=f"sutmr_map_{datetime.now().timestamp()}")
 
         with col_table:
@@ -413,9 +412,11 @@ if st.button("🚀 คำนวณโมเดลจำลองเส้นท�
                     r_indices = res_data['indices']
                     v_loaded_milk = 0 
                     
-                    line_text_summary = f"🚚 **ใบงานจัดส่ง: รถคันที่ {v_idx+1} ({res_data['config']['mode'].upper()})**\n"
-                    line_text_summary += f"• ระยะทาง: {res_data['dist_km']:.2f} กม. | ค่าน้ำมันประเมิน: ฿{res_data['cost']:.2f}\n"
-                    line_text_summary += f"• เวลาออกรถจากฟาร์ม: {DEPART_TIME.strftime('%H:%M')} น.\n\n📍 *ลำดับคิวงานคนขับรถ:*\n"
+                    # 📱 ปรับแต่งหัวข้อใบงาน LINE ให้อ่านง่ายสำหรับคนขับ
+                    line_text_summary = f"🚚 *[SUTMR] ใบงานและลิงก์นำทาง: รถคันที่ {v_idx+1} ({res_data['config']['mode'].upper()})*\n"
+                    line_text_summary += f"• ระยะทางรวม: {res_data['dist_km']:.2f} กม.\n"
+                    line_text_summary += f"• เวลาออกรถ: {DEPART_TIME.strftime('%H:%M')} น.\n\n"
+                    line_text_summary += f"📱 *พี่คนขับกดลิงก์ใต้ชื่อสถานที่เพื่อเริ่มเปิด GPS นำทางได้เลยครับ:*\n"
                     
                     for i in range(len(r_indices)):
                         n = r_indices[i]
@@ -428,20 +429,23 @@ if st.button("🚀 คำนวณโมเดลจำลองเส้นท�
                             l_dist = leg['lengthInMeters'] / 1000
                             curr_time += timedelta(minutes=t_min)
                         
-                        maps_url = f"https://www.google.com/maps/search/?api=1&query={loc_data['Lat']},{loc_data['Lon']}"
+                        # 🔥 เปลี่ยนเป็น Google Maps Navigation URL สั่งเปิดแอปพร้อมขับทันที
+                        maps_url = f"https://www.google.com/maps/dir/?api=1&destination={loc_data['Lat']},{loc_data['Lon']}&travelmode=driving"
                         
                         if i == 0: 
                             display_name = f"{loc_data['ชื่อสถานที่']} (จุดสตาร์ท)"
-                            line_text_summary += f"  {i}. [{curr_time.strftime('%H:%M')}] 🏠 ฟาร์มต้นทาง\n"
+                            line_text_summary += f" 🏠 [{curr_time.strftime('%H:%M')}] *ฟาร์มต้นทาง (จุดออกรถ)*\n"
                         elif i == len(r_indices) - 1: 
                             display_name = f"{loc_data['ชื่อสถานที่']} (กลับเข้าฟาร์ม)"
-                            line_text_summary += f"  🏁 [{curr_time.strftime('%H:%M')}] กลับเข้าฟาร์ม (จบงาน)\n"
+                            line_text_summary += f" 🏁 [{curr_time.strftime('%H:%M')}] *กลับเข้าฟาร์ม (จบงาน)*\n"
                         else: 
                             display_name = loc_data["ชื่อสถานที่"]
-                            line_text_summary += f"  {i}. [{curr_time.strftime('%H:%M')}] {display_name} (ส่งนม {demands[n]} L)\n   🔗 แผนที่: {maps_url}\n"
+                            line_text_summary += f" 📍 *คิวที่ {i}:* {display_name}\n"
+                            line_text_summary += f"    ⏱️ เวลาถึงโดยประเมิน: {curr_time.strftime('%H:%M')} น.\n"
+                            line_text_summary += f"    🥛 จำนวนนมที่ต้องส่ง: {demands[n]} ลิตร\n"
+                            line_text_summary += f"    🚗 กดเพื่อนำทาง: {maps_url}\n\n"
                         
                         node_demand = demands[n]
-                        # 📌 [FIX 3] คำนวณเฉพาะจุดส่งนม ไม่รวมตอนขับกลับมาจบงานที่ฟาร์ม
                         if i > 0 and i < len(r_indices) - 1:
                             v_loaded_milk += node_demand
 
@@ -451,7 +455,7 @@ if st.button("🚀 คำนวณโมเดลจำลองเส้นท�
                             "เวลาที่ถึง": curr_time.strftime("%H:%M"),
                             "ต้องส่งก่อน": loc_data.get("ต้องส่งก่อน", "-") if i > 0 and i < len(r_indices)-1 else "-",
                             "ปริมาณนมที่ส่ง (L)": node_demand if i > 0 and i < len(r_indices)-1 else "-",
-                            "นำทาง": maps_url if i > 0 else None,
+                            "📍 เปิด GPS นำทาง": maps_url if i > 0 else None,
                             "เวลาช่วงเดินทาง (นาที)": t_min if i > 0 else "-", 
                             "ระยะทางช่วง (กม.)": f"{l_dist:.2f}" if i > 0 else "-"
                         })
@@ -461,17 +465,17 @@ if st.button("🚀 คำนวณโมเดลจำลองเส้นท�
                             dyn_service_sec = (BASE_SERVICE_MIN * 60) + (node_milk_volume * PER_LITER_SEC) if i > 0 else 0
                             curr_time += timedelta(seconds=dyn_service_sec)
                     
-                    line_text_summary += f"\n📦 โหลดนมขึ้นรถรวมทั้งสิ้น: *{v_loaded_milk} ลิตร*"
+                    line_text_summary += f"📦 โหลดนมขึ้นรถรวมทั้งสิ้น: *{v_loaded_milk} ลิตร*"
                     
                     st.caption(f"📦 โหลดนมจริงขึ้นรถคันนี้รวม: **{v_loaded_milk} L**")
                     df_schedule = pd.DataFrame(schedule)
                     st.dataframe(
                         df_schedule, use_container_width=True, hide_index=True, key=f"tbl_{v_idx}",
-                        column_config={"นำทาง": st.column_config.LinkColumn("📍 นำทาง", display_text="เปิดแผนที่")}
+                        column_config={"📍 เปิด GPS นำทาง": st.column_config.LinkColumn("📍 เปิด GPS นำทาง", display_text="🚀 กดนำทางจุดนี้")}
                     )
                     
                     st.subheader("💬 ข้อความส่งไลน์สำหรับคนขับ (LINE Quick Share)")
-                    st.text_area("ก๊อปปี้ข้อความด้านล่างนี้ ส่งเข้ากลุ่ม LINE คนขับรถคันนี้ได้ทันที", value=line_text_summary, height=140, key=f"line_txt_{v_idx}")
+                    st.text_area("ก๊อปปี้ข้อความด้านล่างนี้ ส่งเข้ากลุ่ม LINE คนขับรถคันนี้ได้ทันที", value=line_text_summary, height=180, key=f"line_txt_{v_idx}")
                     
                     buf = io.BytesIO()
                     with pd.ExcelWriter(buf, engine='xlsxwriter') as writer:
