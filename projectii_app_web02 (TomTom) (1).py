@@ -71,11 +71,10 @@ with st.sidebar:
         THB_L = st.number_input("ราคาน้ำมัน (THB/L)", min_value=1.0, value=35.0, step=0.5, format="%.2f")
 
     # ==========================================
-    # 🚛 ย้ายขึ้นมาด้านบน: นโยบายและรูปแบบจัดเส้นทาง (Strategic Settings)
+    # 🚛 นโยบายและรูปแบบจัดเส้นทาง (Strategic Settings)
     # ==========================================
     st.header("🚛 ตั้งค่านโยบายและกองรถ")
     
-    # ✨ ย้ายเมนูเลือกรูปแบบเส้นทางมาไว้บนสุดตามคำขอ เพื่อเพิ่มความโดดเด่นสะดุดตา
     ROUTE_TYPE = st.selectbox(
         "🛣️ รูปแบบการเลือกเส้นทางของระบบ", 
         ["fastest", "shortest"], 
@@ -84,7 +83,6 @@ with st.sidebar:
         help="Quickest จะยอมวิ่งอ้อมถนนใหญ่เพื่อให้ถึงไว ส่วน Shortest จะลัดตัดตรงลุยซอยแคบเพื่อให้ระยะทางกิโลเมตรน้อยที่สุด"
     )
     
-    # ตัวเลือกโหมดกองรถ อยู่ต่อกันเป็นกลุ่มทางเลือกกลยุทธ์ธุรกิจ
     FLEET_MODE = st.radio(
         "🎯 โหมดการทำงานของกองรถ (Fleet Mode)",
         ["🟢 เน้นประหยัดต้นทุนที่สุด (Cost Saving)", "🔵 บังคับเฉลี่ยงานให้รถทุกคัน (Balanced Workload)"],
@@ -95,7 +93,6 @@ with st.sidebar:
     st.markdown("---")
     st.subheader("📦 ข้อมูลสเปครถยนต์ในกอง")
     
-    # ➕ ➖ ปุ่มเพิ่มลดรถ
     if 'num_vehicles' not in st.session_state:
         st.session_state.num_vehicles = 2
         
@@ -303,12 +300,13 @@ if st.button("🚀 คำนวณโมเดลจำลองเส้นท�
                 st.error(f"❌ TomTom API ปฏิเสธการจัดเส้นทางของรถคันที่ {v_idx+1}: {res.text}")
                 st.stop()
 
-        # --- Dashboard ---
+        # --- Dashboard ระดับผู้บริหาร (สลับเอารูปแบบออก แล้วใส่ Carbon Footprint กลับมาแทน) ---
         st.subheader("📊 บทวิเคราะห์ผลลัพธ์กองรถและเส้นทาง (KPI Dashboard)")
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("ระยะทางวิ่งรวมกองรถ", f"{total_dist_km:.2f} กม.")
         c2.metric("งบประมาณค่าน้ำมันรวมทั้งหมด", f"฿{total_cost:.2f}")
-        c3.metric("รูปแบบแผนที่นำทางที่ใช้", f"{'⚡ เร็วที่สุด (Quickest)' if ROUTE_TYPE == 'fastest' else '📏 สั้นที่สุด (Shortest)'}")
+        # 🌱 คืนชีพช่อง Carbon Footprint ตามบรีฟ
+        c3.metric("ปริมาณการปล่อยก๊าซ CO₂ รวม", f"{total_co2:.2f} kg-CO₂")
         hh, mm = divmod(total_time_sec // 60, 60)
         c4.metric("เวลารวมในภารกิจ", f"{int(hh)} ชม. {int(mm)} นาที" if hh > 0 else f"{int(mm)} นาที")
 
@@ -418,4 +416,4 @@ if st.button("🚀 คำนวณโมเดลจำลองเส้นท�
                         df_schedule.to_excel(writer, index=False, sheet_name=f'Vehicle_{v_idx+1}')
                     st.download_button(f"📥 ดาวน์โหลดใบงาน คันที่ {v_idx+1} (Excel)", buf.getvalue(), f"Ultimate_Plan_Vehicle_{v_idx+1}.xlsx", key=f"dl_{v_idx}", use_container_width=True)
     else:
-        st.error("❌ ลอจิกโมเดลพัง: ข้อมูลขัดแย้งกันอย่างรุนแรง หรือน้ำหนักสินค้าล้นเกินพิกัดกองรถที่มี")
+        st.error("❌ ลอจิกโมเดลพัง: ข้อมูลขัดแย้งกันอย่างรวนเร หรือน้ำหนักสินค้าล้นเกินพิกัดกองรถที่มี")
