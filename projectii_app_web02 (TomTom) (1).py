@@ -71,17 +71,29 @@ with st.sidebar:
         THB_L = st.number_input("ราคาน้ำมัน (THB/L)", min_value=1.0, value=35.0, step=0.5, format="%.2f")
 
     # ==========================================
-    # ฟังก์ชันการจัดการกองรถ (Fleet Settings)
+    # 🚛 ย้ายขึ้นมาด้านบน: นโยบายและรูปแบบจัดเส้นทาง (Strategic Settings)
     # ==========================================
-    st.header("🚛 จัดการกองรถและการกระจายงาน")
+    st.header("🚛 ตั้งค่านโยบายและกองรถ")
     
-    # ตัวเลือกโหมดกองรถ
+    # ✨ ย้ายเมนูเลือกรูปแบบเส้นทางมาไว้บนสุดตามคำขอ เพื่อเพิ่มความโดดเด่นสะดุดตา
+    ROUTE_TYPE = st.selectbox(
+        "🛣️ รูปแบบการเลือกเส้นทางของระบบ", 
+        ["fastest", "shortest"], 
+        index=0, 
+        format_func=lambda x: "⚡ Quickest (เน้นทางที่เร็วที่สุด เลี่ยงรถติด)" if x == "fastest" else "📏 Shortest (เน้นทางที่สั้นที่สุด เซฟระยะทางไมล์รถ)",
+        help="Quickest จะยอมวิ่งอ้อมถนนใหญ่เพื่อให้ถึงไว ส่วน Shortest จะลัดตัดตรงลุยซอยแคบเพื่อให้ระยะทางกิโลเมตรน้อยที่สุด"
+    )
+    
+    # ตัวเลือกโหมดกองรถ อยู่ต่อกันเป็นกลุ่มทางเลือกกลยุทธ์ธุรกิจ
     FLEET_MODE = st.radio(
         "🎯 โหมดการทำงานของกองรถ (Fleet Mode)",
         ["🟢 เน้นประหยัดต้นทุนที่สุด (Cost Saving)", "🔵 บังคับเฉลี่ยงานให้รถทุกคัน (Balanced Workload)"],
         index=0,
         help="โหมดประหยัดจะพยายามจอดรถไว้ให้มากที่สุด ส่วนโหมดเฉลี่ยงานจะบังคับให้รถทุกคันออกไปวิ่งเพื่อส่งเสร็จไว"
     )
+    
+    st.markdown("---")
+    st.subheader("📦 ข้อมูลสเปครถยนต์ในกอง")
     
     # ➕ ➖ ปุ่มเพิ่มลดรถ
     if 'num_vehicles' not in st.session_state:
@@ -95,7 +107,7 @@ with st.sidebar:
         if st.button("➖ ลดรถ 1 คัน", use_container_width=True) and st.session_state.num_vehicles > 1:
             st.session_state.num_vehicles -= 1
             
-    st.caption(f"ปัจจุบันมีรถทั้งหมด: **{st.session_state.num_vehicles}** คัน")
+    st.caption(f"ปัจจุบันมีรถสแตนด์บายทั้งหมด: **{st.session_state.num_vehicles}** คัน")
     
     vehicles_data = []
     for v_idx in range(st.session_state.num_vehicles):
@@ -118,20 +130,9 @@ with st.sidebar:
     DEAD_SPACE_RATIO = 0.15 
     EMISSION_FACTOR = 2.70757206 
     
-    # ==========================================
-    # ✨ ฟังก์ชันเงื่อนไขเส้นทาง (เพิ่ม Quickest / Shortest)
-    # ==========================================
-    st.header("🚧 ข้อจำกัดและรูปแบบเส้นทาง")
-    
-    ROUTE_TYPE = st.selectbox(
-        "🛣️ รูปแบบการเลือกเส้นทางของระบบ", 
-        ["fastest", "shortest"], 
-        index=0, 
-        format_func=lambda x: "⚡ Quickest (เน้นทางที่เร็วที่สุด เลี่ยงรถติด)" if x == "fastest" else "📏 Shortest (เน้นทางที่สั้นที่สุด เซฟระยะทางไมล์รถ)",
-        help="Quickest จะยอมวิ่งอ้อมถนนใหญ่เพื่อให้ถึงไว ส่วน Shortest จะลัดตัดตรงลุยซอยแคบเพื่อให้ระยะทางกิโลเมตรน้อยที่สุด"
-    )
-    
-    AVOID_AREA = st.text_area("พิกัดพื้นที่ห้ามผ่าน (ขึ้นบรรทัดใหม่สำหรับกล่องถัดไป)", value="", height=100)
+    st.markdown("---")
+    st.header("🚧 พื้นที่ห้ามผ่าน")
+    AVOID_AREA = st.text_area("พิกัดพื้นที่ห้ามผ่าน (ขึ้นบรรทัดใหม่สำหรับกล่องถัดไป)", value="", height=80)
     st.caption("รูปแบบ: Lat,Long มุมที่ 1 : Lat,Long มุมที่ 2")
 
 ROUTE_COLORS = ["#2980B9", "#27AE60", "#E67E22", "#8E44AD", "#16A085", "#C0392B", "#F39C12"]
@@ -195,7 +196,6 @@ if st.button("🚀 คำนวณโมเดลจำลองเส้นท�
         # มิติเวลา (Time Dimension)
         def time_callback(from_index, to_index):
             d = dist_matrix[manager.IndexToNode(from_index)][manager.IndexToNode(to_index)]
-            # จูนความเร็วประเมินเบื้องต้นในโมเดลคณิตศาสตร์
             speed_kmh = 30 if ROUTE_TYPE == "fastest" else 25 
             return int((d / 1000) / speed_kmh * 60) + (math.ceil(SERVICE_TIME_SEC / 60) if from_index != 0 else 0)
         
@@ -205,7 +205,6 @@ if st.button("🚀 คำนวณโมเดลจำลองเส้นท�
         routing.AddDimension(transit_idx, 2880, 2880, False, "Time")
         time_dim = routing.GetDimensionOrDie("Time")
         
-        # ตรวจเช็คโหมดเฉลี่ยงานของกองรถ
         if "🔵 บังคับเฉลี่ยงาน" in FLEET_MODE:
             time_dim.SetGlobalSpanCostCoefficient(120) 
         
@@ -253,7 +252,6 @@ if st.button("🚀 คำนวณโมเดลจำลองเส้นท�
                     })
                 except: pass
 
-        # วนลูปสร้างเส้นทางโดยส่งเงื่อนไขออปชันไปที่ TomTom API
         for v_idx in range(num_vehicles):
             route_indices = []
             index = routing.Start(v_idx)
@@ -266,11 +264,8 @@ if st.button("🚀 คำนวณโมเดลจำลองเส้นท�
                 continue
                 
             v_info = vehicles_data[v_idx]
-            
-            # 🔗 เรียก TomTom API พร้อมผูกตัวแปร "routeType" ตามที่เลือกบนหน้าเว็บ
             url = f"https://api.tomtom.com/routing/1/calculateRoute/{':'.join([f'{coords[n][0]},{coords[n][1]}' for n in route_indices])}/json"
             
-            # ✨ จุดโฟกัสสำคัญ: ส่งพารามิเตอร์ routeType (fastest/shortest) ยิงเข้า Server ของ TomTom จริง
             api_params = {
                 "key": API_KEY, 
                 "travelMode": v_info['mode'],
@@ -308,11 +303,11 @@ if st.button("🚀 คำนวณโมเดลจำลองเส้นท�
                 st.error(f"❌ TomTom API ปฏิเสธการจัดเส้นทางของรถคันที่ {v_idx+1}: {res.text}")
                 st.stop()
 
-        # --- Dashboard ระดับผู้บริหาร ---
+        # --- Dashboard ---
         st.subheader("📊 บทวิเคราะห์ผลลัพธ์กองรถและเส้นทาง (KPI Dashboard)")
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("ระยะทางวิ่งรวมกองรถ", f"{total_dist_km:.2f} กม.")
-        c2.metric("งบประมาณค่าน้ำมันรวม", f"฿{total_cost:.2f}")
+        c2.metric("งบประมาณค่าน้ำมันรวมทั้งหมด", f"฿{total_cost:.2f}")
         c3.metric("รูปแบบแผนที่นำทางที่ใช้", f"{'⚡ เร็วที่สุด (Quickest)' if ROUTE_TYPE == 'fastest' else '📏 สั้นที่สุด (Shortest)'}")
         hh, mm = divmod(total_time_sec // 60, 60)
         c4.metric("เวลารวมในภารกิจ", f"{int(hh)} ชม. {int(mm)} นาที" if hh > 0 else f"{int(mm)} นาที")
