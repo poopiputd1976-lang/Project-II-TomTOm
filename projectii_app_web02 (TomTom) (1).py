@@ -185,6 +185,10 @@ else:
 # ==========================================
 st.markdown("---")
 if st.button("🚀 คำนวณโมเดลจำลองเส้นทางขั้นสูง", type="primary", use_container_width=True):
+    
+    # 📌 [FIX 1] ป้องกันปัญหาตารางแหว่งจากการลบ/เพิ่มข้อมูลใน data_editor ให้เคลียร์ Index ใหม่ทั้งหมดก่อนนำไปใช้
+    edited_df = edited_df.reset_index(drop=True)
+    
     demands = []
     for i, row in edited_df.iterrows():
         if i == 0: 
@@ -272,7 +276,7 @@ if st.button("🚀 คำนวณโมเดลจำลองเส้นท�
         
         rectangles = []
         if AVOID_AREA.strip() != "":
-            for line in AVOID_AREA.strip().split('\n'):
+            for line_no, line in enumerate(AVOID_AREA.strip().split('\n'), 1):
                 line = line.strip()
                 if not line: continue
                 try:
@@ -283,7 +287,8 @@ if st.button("🚀 คำนวณโมเดลจำลองเส้นท�
                         "southWestCorner": {"latitude": min(lat1, lat2), "longitude": min(lon1, lon2)},
                         "northEastCorner": {"latitude": max(lat1, lat2), "longitude": max(lon1, lon2)}
                     })
-                except: pass
+                except Exception:
+                    st.warning(f"⚠️ รูปแบบพื้นที่ห้ามผ่านในบรรทัดที่ {line_no} ไม่ถูกต้อง (จะถูกข้ามไป)")
 
         dropped_nodes = []
         for node in range(len(coords)):
@@ -392,7 +397,8 @@ if st.button("🚀 คำนวณโมเดลจำลองเส้นท�
                         folium.Marker([loc['Lat'], loc['Lon']], popup=f"รถคันที่ {v_idx+1} คิวที่ {q_i}: {loc['ชื่อสถานที่']}", icon=folium.DivIcon(html=icon_html)).add_to(m)
 
             folium.LayerControl().add_to(m)
-            st_folium(m, width="100%", height=520, returned_objects=[])
+            # 📌 [FIX 2] เพิ่ม key เพื่อบังคับให้แผนที่เรนเดอร์ใหม่ทุกรอบที่กดประมวลผล
+            st_folium(m, width="100%", height=520, returned_objects=[], key=f"sutmr_map_{datetime.now().timestamp()}")
 
         with col_table:
             st.subheader("📋 แผนการเดินรถรายวันแยกรายคันรถ")
@@ -432,10 +438,12 @@ if st.button("🚀 คำนวณโมเดลจำลองเส้นท�
                             line_text_summary += f"  🏁 [{curr_time.strftime('%H:%M')}] กลับเข้าฟาร์ม (จบงาน)\n"
                         else: 
                             display_name = loc_data["ชื่อสถานที่"]
-                            line_text_summary += f"  {i}. [{curr_time.strftime('%H:%M')}] {display_name} (ส่งนม {demands[n]} L)\n     🔗 แผนที่: {maps_url}\n"
+                            line_text_summary += f"  {i}. [{curr_time.strftime('%H:%M')}] {display_name} (ส่งนม {demands[n]} L)\n   🔗 แผนที่: {maps_url}\n"
                         
                         node_demand = demands[n]
-                        v_loaded_milk += node_demand
+                        # 📌 [FIX 3] คำนวณเฉพาะจุดส่งนม ไม่รวมตอนขับกลับมาจบงานที่ฟาร์ม
+                        if i > 0 and i < len(r_indices) - 1:
+                            v_loaded_milk += node_demand
 
                         schedule.append({
                             "คิว": i if i < len(r_indices)-1 else "🏁", 
