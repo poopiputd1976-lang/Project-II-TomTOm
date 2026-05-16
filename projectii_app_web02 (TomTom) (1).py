@@ -74,10 +74,10 @@ def get_cleaned_df(uploaded_file):
         st.stop()
 
 # ==========================================
-# 1. ตั้งค่าหน้าเพจ UI
+# 1. ตั้งค่าหน้าเพจ UI (อัปเดตเป็นชื่อ SUTMR)
 # ==========================================
-st.set_page_config(page_title="Ultimate Milk Run Optimization v2.1", page_icon="🚚", layout="wide")
-st.title("🚚 ระบบวางแผนเส้นทางจัดส่งอัจฉริยะ (Operational v2.1 - Optimized Edition)")
+st.set_page_config(page_title="SUT Milk Run (SUTMR) v2.1", page_icon="🚚", layout="wide")
+st.title("🚚 SUT Milk Run (SUTMR)")
 st.markdown("ระบบจำลองและเพิ่มประสิทธิภาพกองรถ VRP ประมวลผลแม่นยำด้วยการเชื่อมโยงข้อมูลผ่าน Distance/Time Matrix")
 
 # ==========================================
@@ -181,7 +181,7 @@ else:
     st.stop()
 
 # ==========================================
-# 4. ประมวลผลคณิตศาสตร์ (Optimized VRP Core Logic)
+# 4. ประมวลผลคณิตศาสตร์ (SUTMR Core Logic)
 # ==========================================
 st.markdown("---")
 if st.button("🚀 คำนวณโมเดลจำลองเส้นทางขั้นสูง", type="primary", use_container_width=True):
@@ -202,17 +202,14 @@ if st.button("🚀 คำนวณโมเดลจำลองเส้นท�
         coords = edited_df[['Lat', 'Lon']].values.tolist()
         num_nodes = len(coords)
         
-        # 📌 OPTIMIZATION 1: สร้าง Matrix ตารางเวลาและระยะทางล่วงหน้า (เสมือนจำลองสถิติตามสภาพขับจริงเบื้องต้น)
-        # เพื่อลดการที่ OR-Tools คำนวณขัดแย้งกับ TomTom API ตอนจบ
+        # สร้าง Matrix ตารางเวลาและระยะทางล่วงหน้า เพื่อให้สอดรับโครงสร้างระบบ SUTMR
         matrix_time_min = [[0]*num_nodes for _ in range(num_nodes)]
         matrix_dist_m = [[0]*num_nodes for _ in range(num_nodes)]
         
-        # คำนวณเบื้องต้นแบบรวดเร็วและใส่ Buffer ในจุดจราจรเพื่อสร้างสมดุลสัดส่วน Matrix
         speed_kmh = 30 if ROUTE_TYPE == "fastest" else 25 
         for i in range(num_nodes):
             for j in range(num_nodes):
                 if i == j: continue
-                # คำนวณระยะเส้นตรงเป็นฐานตั้งต้นเพื่อความรวดเร็วในการจัดสรรคิวของ OR-Tools
                 lat1, lon1 = coords[i]; lat2, lon2 = coords[j]
                 R = 6371000
                 p1, p2 = math.radians(lat1), math.radians(lat2)
@@ -347,14 +344,14 @@ if st.button("🚀 คำนวณโมเดลจำลองเส้นท�
                 st.stop()
 
         if dropped_nodes:
-            st.warning(f"⚠️ **แจ้งเตือนระบบจัดรถ:** มีจุดส่งของจำนวน {len(dropped_nodes)} จุดที่ระบบจำเป็นต้องข้ามไปในวันนี้")
+            st.warning(f"⚠️ **แจ้งเตือนระบบ SUTMR:** มีจุดส่งของจำนวน {len(dropped_nodes)} จุดที่ระบบจำเป็นต้องข้ามไปในวันนี้")
             st.info("💡 ข้อมูลถูกขัดเกลาด้วยการคำนวณเบื้องต้นบนระบบ Matrix แล้ว ป้องกันการส่งเลทและไม่กระทบลูกค้าร้านอื่น")
             with st.expander("🔍 ดูรายชื่อสถานที่ที่ข้ามไป"):
                 for dn in dropped_nodes:
                     st.write(f"- ❌ [{edited_df.iloc[dn].get('ชื่อสถานที่', 'ไม่มีชื่อ')}] (ต้องส่งก่อน: {edited_df.iloc[dn].get('ต้องส่งก่อน', '-')})")
 
         # --- KPI Dashboard ---
-        st.subheader("📊 บทวิเคราะห์ผลลัพธ์กองรถและเส้นทาง (KPI Dashboard)")
+        st.subheader("📊 บทวิเคราะห์ผลลัพธ์กองรถและเส้นทาง (SUTMR KPI Dashboard)")
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("ระยะทางวิ่งรวมกองรถ", f"{total_dist_km:.2f} กม.")
         c2.metric("งบประมาณค่าน้ำมันรวมทั้งหมด", f"฿{total_cost:.2f}")
@@ -471,6 +468,6 @@ if st.button("🚀 คำนวณโมเดลจำลองเส้นท�
                     buf = io.BytesIO()
                     with pd.ExcelWriter(buf, engine='xlsxwriter') as writer:
                         df_schedule.to_excel(writer, index=False, sheet_name=f'Vehicle_{v_idx+1}')
-                    st.download_button(f"📥 ดาวน์โหลดใบงาน คันที่ {v_idx+1} (Excel)", buf.getvalue(), f"Ultimate_Plan_Vehicle_{v_idx+1}.xlsx", key=f"dl_{v_idx}", use_container_width=True)
+                    st.download_button(f"📥 ดาวน์โหลดใบงาน คันที่ {v_idx+1} (Excel)", buf.getvalue(), f"SUTMR_Plan_Vehicle_{v_idx+1}.xlsx", key=f"dl_{v_idx}", use_container_width=True)
     else:
         st.error("❌ ลอจิกโมเดลพัง: ข้อมูลขัดแย้งกันอย่างรวนเร หรือน้ำหนักสินค้าล้นเกินพิกัดกองรถที่มี")
