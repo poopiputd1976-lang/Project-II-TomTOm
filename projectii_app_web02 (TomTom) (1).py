@@ -45,9 +45,9 @@ def fetch_today_oil_price():
 # ==========================================
 # 1. ตั้งค่าหน้าเพจ UI
 # ==========================================
-st.set_page_config(page_title="Hybrid Milk Run Optimization", page_icon="🚚", layout="wide")
-st.title("🚚 ระบบวางแผนเส้นทางจัดส่งนมแบบผสมผสาน (Hybrid VRP: Capacity + Time)")
-st.markdown("ระบบวิเคราะห์เส้นทางอัจฉริยะขั้นสูง คำนวณความจุรถ ควบคุมเวลาส่งมอบ และเลือกโหมดการกระจายกองรถได้ตามใจชอบ")
+st.set_page_config(page_title="Ultimate Milk Run Optimization", page_icon="🚚", layout="wide")
+st.title("🚚 ระบบวางแผนเส้นทางจัดส่งอัจฉริยะขั้นสุด (Ultimate Hybrid VRP)")
+st.markdown("ระบบคำนวณกองรถ VRP ควบคุมความจุและเวลา พร้อมระบบเลือกเส้นทางอัจฉริยะ (Quickest / Shortest) ผ่าน TomTom API")
 
 # ==========================================
 # 2. แผงควบคุมด้านข้าง (Sidebar)
@@ -70,17 +70,20 @@ with st.sidebar:
         st.warning("⚠️ ไม่สามารถดึงข้อมูลราคา Real-time ได้ (ใช้ราคาประเมิน)")
         THB_L = st.number_input("ราคาน้ำมัน (THB/L)", min_value=1.0, value=35.0, step=0.5, format="%.2f")
 
-    # ✨ ระบบจัดการกองรถและปุ่มจูนความยืดหยุ่น (Fleet Management)
-    st.header("🚛 จัดการกองรถขนส่ง")
+    # ==========================================
+    # ฟังก์ชันการจัดการกองรถ (Fleet Settings)
+    # ==========================================
+    st.header("🚛 จัดการกองรถและการกระจายงาน")
     
-    # 🎯 ปุ่มเลือกโหมดความยืดหยุ่นในการกระจายงาน
+    # ตัวเลือกโหมดกองรถ
     FLEET_MODE = st.radio(
-        "🎯 เลือกโหมดการทำงานของกองรถ",
+        "🎯 โหมดการทำงานของกองรถ (Fleet Mode)",
         ["🟢 เน้นประหยัดต้นทุนที่สุด (Cost Saving)", "🔵 บังคับเฉลี่ยงานให้รถทุกคัน (Balanced Workload)"],
         index=0,
-        help="โหมดประหยัดจะใช้รถให้น้อยคันที่สุด ส่วนโหมดเฉลี่ยงานจะบังคับให้รถทุกคันออกไปช่วยกันวิ่งเพื่อให้ส่งเสร็จไว"
+        help="โหมดประหยัดจะพยายามจอดรถไว้ให้มากที่สุด ส่วนโหมดเฉลี่ยงานจะบังคับให้รถทุกคันออกไปวิ่งเพื่อส่งเสร็จไว"
     )
     
+    # ➕ ➖ ปุ่มเพิ่มลดรถ
     if 'num_vehicles' not in st.session_state:
         st.session_state.num_vehicles = 2
         
@@ -115,14 +118,26 @@ with st.sidebar:
     DEAD_SPACE_RATIO = 0.15 
     EMISSION_FACTOR = 2.70757206 
     
-    st.header("🚧 ข้อจำกัดเส้นทาง")
+    # ==========================================
+    # ✨ ฟังก์ชันเงื่อนไขเส้นทาง (เพิ่ม Quickest / Shortest)
+    # ==========================================
+    st.header("🚧 ข้อจำกัดและรูปแบบเส้นทาง")
+    
+    ROUTE_TYPE = st.selectbox(
+        "🛣️ รูปแบบการเลือกเส้นทางของระบบ", 
+        ["fastest", "shortest"], 
+        index=0, 
+        format_func=lambda x: "⚡ Quickest (เน้นทางที่เร็วที่สุด เลี่ยงรถติด)" if x == "fastest" else "📏 Shortest (เน้นทางที่สั้นที่สุด เซฟระยะทางไมล์รถ)",
+        help="Quickest จะยอมวิ่งอ้อมถนนใหญ่เพื่อให้ถึงไว ส่วน Shortest จะลัดตัดตรงลุยซอยแคบเพื่อให้ระยะทางกิโลเมตรน้อยที่สุด"
+    )
+    
     AVOID_AREA = st.text_area("พิกัดพื้นที่ห้ามผ่าน (ขึ้นบรรทัดใหม่สำหรับกล่องถัดไป)", value="", height=100)
     st.caption("รูปแบบ: Lat,Long มุมที่ 1 : Lat,Long มุมที่ 2")
 
 ROUTE_COLORS = ["#2980B9", "#27AE60", "#E67E22", "#8E44AD", "#16A085", "#C0392B", "#F39C12"]
 
 # ==========================================
-# 3. จัดการข้อมูล
+# 3. จัดการข้อมูลสัญญาส่งมอบนม
 # ==========================================
 st.subheader("📍 นำเข้าข้อมูลจุดจัดส่ง")
 uploaded_file = st.file_uploader("📂 อัปโหลดไฟล์รายการจัดส่ง (Excel หรือ CSV)", type=["csv", "xlsx"])
@@ -152,10 +167,10 @@ def haversine_distance(coord1, coord2):
     return int(R * (2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))))
 
 # ==========================================
-# 4. ประมวลผล (Hybrid Optimization Core)
+# 4. ประมวลผลคณิตศาสตร์ (Ultimate Optimization Engine)
 # ==========================================
 st.markdown("---")
-if st.button("🚀 ประมวลผลเส้นทางแบบ Hybrid (คิดทั้งความจุและเวลา)", type="primary", use_container_width=True):
+if st.button("🚀 คำนวณโมเดลจำลองเส้นทางขั้นสูง", type="primary", use_container_width=True):
     demands = []
     for i, row in edited_df.iterrows():
         if i == 0: 
@@ -169,7 +184,7 @@ if st.button("🚀 ประมวลผลเส้นทางแบบ Hybrid
         st.error(f"❌ ปริมาณนมรวม ({sum(demands)} L) เกินความจุรวมของกองรถทั้งหมดที่มี ({total_fleet_capacity} L)")
         st.stop()
         
-    with st.spinner('กำลังคำนวณแบบผสมผสาน (เช็คความจุ + ล็อกเวลา + คำนวณตามโหมดกองรถ)...'):
+    with st.spinner('กำลังประมวลผลอัลกอริทึม Hybrid VRP ควบคู่กับวิเคราะห์พิกัด TomTom...'):
         coords = edited_df[['Lat', 'Lon']].values.tolist()
         dist_matrix = [[haversine_distance(coords[i], coords[j]) for j in range(len(coords))] for i in range(len(coords))]
         
@@ -177,10 +192,12 @@ if st.button("🚀 ประมวลผลเส้นทางแบบ Hybrid
         manager = pywrapcp.RoutingIndexManager(len(coords), num_vehicles, 0)
         routing = pywrapcp.RoutingModel(manager)
         
-        # 1. ตั้งค่ามิติเรื่อง เวลา (Time Dimension)
+        # มิติเวลา (Time Dimension)
         def time_callback(from_index, to_index):
             d = dist_matrix[manager.IndexToNode(from_index)][manager.IndexToNode(to_index)]
-            return int((d / 1000) / 30 * 60) + (math.ceil(SERVICE_TIME_SEC / 60) if from_index != 0 else 0)
+            # จูนความเร็วประเมินเบื้องต้นในโมเดลคณิตศาสตร์
+            speed_kmh = 30 if ROUTE_TYPE == "fastest" else 25 
+            return int((d / 1000) / speed_kmh * 60) + (math.ceil(SERVICE_TIME_SEC / 60) if from_index != 0 else 0)
         
         transit_idx = routing.RegisterTransitCallback(time_callback)
         routing.SetArcCostEvaluatorOfAllVehicles(transit_idx)
@@ -188,14 +205,14 @@ if st.button("🚀 ประมวลผลเส้นทางแบบ Hybrid
         routing.AddDimension(transit_idx, 2880, 2880, False, "Time")
         time_dim = routing.GetDimensionOrDie("Time")
         
-        # ✨ ลอจิกเปิด-ปิดโหมดเฉลี่ยงานตามปุ่มวิทยุใน Sidebar
+        # ตรวจเช็คโหมดเฉลี่ยงานของกองรถ
         if "🔵 บังคับเฉลี่ยงาน" in FLEET_MODE:
-            time_dim.SetGlobalSpanCostCoefficient(100) # บังคับให้สับงานแบ่งกันวิ่งเท่าๆ กันทันที
+            time_dim.SetGlobalSpanCostCoefficient(120) 
         
         for v_idx in range(num_vehicles):
             time_dim.CumulVar(routing.Start(v_idx)).SetValue(DEPART_TIME.hour * 60 + DEPART_TIME.minute)
         
-        # ใส่ Time Windows ของลูกค้าแต่ละราย
+        # เงื่อนไขเวลาของลูกค้า (Time Windows)
         for i, row in edited_df.iterrows():
             idx = manager.NodeToIndex(i)
             s = time_to_min(row.get("เริ่มรับได้")) or 0
@@ -204,13 +221,13 @@ if st.button("🚀 ประมวลผลเส้นทางแบบ Hybrid
             if i != 0 and e < 2880:
                 time_dim.SetCumulVarSoftUpperBound(idx, e, 100)
 
-        # 2. ตั้งค่ามิติเรื่อง ความจุรถ (Capacity Dimension)
+        # มิติความจุถังนม (Capacity Dimension)
         def demand_callback(idx): return demands[manager.IndexToNode(idx)]
         demand_idx = routing.RegisterUnaryTransitCallback(demand_callback)
         fleet_capacities = [v['capacity'] for v in vehicles_data]
         routing.AddDimensionWithVehicleCapacity(demand_idx, 0, fleet_capacities, True, "Capacity")
 
-        # ตั้งค่าค้นหาคำตอบที่ดีที่สุด
+        # ตัวแปรค้นหาผลลัพธ์
         search_params = pywrapcp.DefaultRoutingSearchParameters()
         search_params.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.AUTOMATIC
         search_params.local_search_metaheuristic = routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
@@ -236,6 +253,7 @@ if st.button("🚀 ประมวลผลเส้นทางแบบ Hybrid
                     })
                 except: pass
 
+        # วนลูปสร้างเส้นทางโดยส่งเงื่อนไขออปชันไปที่ TomTom API
         for v_idx in range(num_vehicles):
             route_indices = []
             index = routing.Start(v_idx)
@@ -249,9 +267,15 @@ if st.button("🚀 ประมวลผลเส้นทางแบบ Hybrid
                 
             v_info = vehicles_data[v_idx]
             
-            # เรียก TomTom API นำทางจริงพร้อมกั้นพื้นที่ห้ามผ่าน
+            # 🔗 เรียก TomTom API พร้อมผูกตัวแปร "routeType" ตามที่เลือกบนหน้าเว็บ
             url = f"https://api.tomtom.com/routing/1/calculateRoute/{':'.join([f'{coords[n][0]},{coords[n][1]}' for n in route_indices])}/json"
-            api_params = {"key": API_KEY, "travelMode": v_info['mode']}
+            
+            # ✨ จุดโฟกัสสำคัญ: ส่งพารามิเตอร์ routeType (fastest/shortest) ยิงเข้า Server ของ TomTom จริง
+            api_params = {
+                "key": API_KEY, 
+                "travelMode": v_info['mode'],
+                "routeType": ROUTE_TYPE  
+            }
             
             if rectangles:
                 res = requests.post(url, params=api_params, json={"avoidAreas": {"rectangles": rectangles}})
@@ -281,28 +305,28 @@ if st.button("🚀 ประมวลผลเส้นทางแบบ Hybrid
                     "config": v_info
                 }
             else:
-                st.error(f"❌ TomTom API ขัดข้องที่รถคันที่ {v_idx+1}: {res.text}")
+                st.error(f"❌ TomTom API ปฏิเสธการจัดเส้นทางของรถคันที่ {v_idx+1}: {res.text}")
                 st.stop()
 
-        # --- Dashboard ---
-        st.subheader("📊 ผลวิเคราะห์ภาพรวมระดับ Hybrid (Fleet Summary)")
+        # --- Dashboard ระดับผู้บริหาร ---
+        st.subheader("📊 บทวิเคราะห์ผลลัพธ์กองรถและเส้นทาง (KPI Dashboard)")
         c1, c2, c3, c4 = st.columns(4)
-        c1.metric("ระยะทางรวมกองรถ", f"{total_dist_km:.2f} กม.")
-        c2.metric("ต้นทุนน้ำมันรวมทั้งหมด", f"฿{total_cost:.2f}")
-        c3.metric("รถที่หยิบมาใช้งานจริง", f"{len(fleet_results)} คัน / {num_vehicles} คัน")
+        c1.metric("ระยะทางวิ่งรวมกองรถ", f"{total_dist_km:.2f} กม.")
+        c2.metric("งบประมาณค่าน้ำมันรวม", f"฿{total_cost:.2f}")
+        c3.metric("รูปแบบแผนที่นำทางที่ใช้", f"{'⚡ เร็วที่สุด (Quickest)' if ROUTE_TYPE == 'fastest' else '📏 สั้นที่สุด (Shortest)'}")
         hh, mm = divmod(total_time_sec // 60, 60)
-        c4.metric("เวลาปฏิบัติงานรวม", f"{int(hh)} ชม. {int(mm)} นาที" if hh > 0 else f"{int(mm)} นาที")
+        c4.metric("เวลารวมในภารกิจ", f"{int(hh)} ชม. {int(mm)} นาที" if hh > 0 else f"{int(mm)} นาที")
 
-        # --- แผนที่และตาราง ---
+        # --- แผนที่และตารางคิวงาน ---
         col_map, col_table = st.columns([1.3, 1.7])
         with col_map:
-            st.subheader("🗺️ แผนที่กองรถระบบผสมผสาน")
+            st.subheader("🗺️ แผนที่เส้นทางนำทางแยกสีคันรถ")
             m = folium.Map(location=coords[0], zoom_start=12, control_scale=True)
             FloatImage("https://upload.wikimedia.org/wikipedia/commons/e/ec/Compass_rose_n_blank.svg", bottom=5, left=90, width="6%").add_to(m)
             
             folium.TileLayer(
                 tiles=f"https://api.tomtom.com/traffic/map/4/tile/flow/relative0-dark/{{z}}/{{x}}/{{y}}.png?key={API_KEY}",
-                attr='TomTom Traffic', name='ปริมาณการจราจร (Traffic)', overlay=True, control=True, opacity=0.5
+                attr='TomTom Traffic', name='ปริมาณสภาพจราจร (Traffic)', overlay=True, control=True, opacity=0.5
             ).add_to(m)
 
             for color_i, (v_idx, res_data) in enumerate(fleet_results.items()):
@@ -337,18 +361,18 @@ if st.button("🚀 ประมวลผลเส้นทางแบบ Hybrid
             st_folium(m, width="100%", height=520, returned_objects=[])
 
         with col_table:
-            st.subheader("📋 ใบงานและคิวงานสัญญาลูกค้า (Hybrid Plan)")
+            st.subheader("📋 แผนการเดินรถรายวันแยกรายคันรถ")
             
             tabs = st.tabs([f"🚚 คันที่ {v_idx+1} ({res_data['config']['mode']})" for v_idx, res_data in fleet_results.items()])
             
             for tab_i, (v_idx, res_data) in enumerate(fleet_results.items()):
                 with tabs[tab_i]:
-                    st.markdown(f"**ระยะทางเที่ยวนี้:** {res_data['dist_km']:.2f} กม. | **ค่าน้ำมัน:** ฿{res_data['cost']:.2f} | **ความจุรถ:** {res_data['config']['capacity']} L")
+                    st.markdown(f"**ระยะทางสะสมเที่ยวนี้:** {res_data['dist_km']:.2f} กม. | **ค่าน้ำมันคันนี้:** ฿{res_data['cost']:.2f} | **ความจุสูงสุดรถ:** {res_data['config']['capacity']} L")
                     
                     schedule = []
                     curr_time = datetime.combine(datetime.today(), DEPART_TIME)
                     r_indices = res_data['indices']
-                    v_loaded_milk = 0 # ตัวแปรไว้นับปริมาณนมสะสมบนรถ
+                    v_loaded_milk = 0 
                     
                     for i in range(len(r_indices)):
                         n = r_indices[i]
@@ -376,16 +400,16 @@ if st.button("🚀 ประมวลผลเส้นทางแบบ Hybrid
                             "สถานที่": display_name, 
                             "เวลาที่ถึง": curr_time.strftime("%H:%M"),
                             "ต้องส่งก่อน": loc_data.get("ต้องส่งก่อน", "-") if i > 0 and i < len(r_indices)-1 else "-",
-                            "นมที่ส่งเที่ยวนี้ (L)": node_demand if i > 0 and i < len(r_indices)-1 else "-",
+                            "ปริมาณนมที่ส่ง (L)": node_demand if i > 0 and i < len(r_indices)-1 else "-",
                             "นำทาง": maps_url if i > 0 else None,
-                            "เวลาเดินทาง (นาที)": t_min if i > 0 else "-", 
+                            "เวลาช่วงเดินทาง (นาที)": t_min if i > 0 else "-", 
                             "ระยะทางช่วง (กม.)": f"{l_dist:.2f}" if i > 0 else "-"
                         })
                         
                         if i < len(r_indices) - 1:
                             curr_time += timedelta(seconds=SERVICE_TIME_SEC)
                     
-                    st.caption(f"📦 น้ำหนักสินค้ารวมที่บรรทุกบนรถคันนี้: **{v_loaded_milk} L** (ความจุสูงสุด {res_data['config']['capacity']} L)")
+                    st.caption(f"📦 โหลดนมจริงขึ้นรถคันนี้รวม: **{v_loaded_milk} L**")
                     df_schedule = pd.DataFrame(schedule)
                     st.dataframe(
                         df_schedule, use_container_width=True, hide_index=True, key=f"tbl_{v_idx}",
@@ -397,6 +421,6 @@ if st.button("🚀 ประมวลผลเส้นทางแบบ Hybrid
                     buf = io.BytesIO()
                     with pd.ExcelWriter(buf, engine='xlsxwriter') as writer:
                         df_schedule.to_excel(writer, index=False, sheet_name=f'Vehicle_{v_idx+1}')
-                    st.download_button(f"📥 ดาวน์โหลดใบงาน คันที่ {v_idx+1} (Excel)", buf.getvalue(), f"MilkRun_Hybrid_Plan_{v_idx+1}.xlsx", key=f"dl_{v_idx}", use_container_width=True)
+                    st.download_button(f"📥 ดาวน์โหลดใบงาน คันที่ {v_idx+1} (Excel)", buf.getvalue(), f"Ultimate_Plan_Vehicle_{v_idx+1}.xlsx", key=f"dl_{v_idx}", use_container_width=True)
     else:
-        st.error("❌ ไม่สามารถจัดเส้นทางได้: น้ำหนักรวมล้นคลังรถทั้งหมด หรือเงื่อนไขเวลาลูกค้าขัดแย้งกันรุนแรงเกินไป")
+        st.error("❌ ลอจิกโมเดลพัง: ข้อมูลขัดแย้งกันอย่างรุนแรง หรือน้ำหนักสินค้าล้นเกินพิกัดกองรถที่มี")
