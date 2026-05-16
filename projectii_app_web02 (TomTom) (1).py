@@ -31,7 +31,7 @@ def fetch_today_oil_price():
             ptt_prices = data['response']['stations']['ptt']
             date_str = data['response']['date']
             
-            target_types = ["ดีсел", "แก๊สโซฮอล์ 91", "แก๊สโซฮอล์ 95"]
+            target_types = ["ดีเซล", "แก๊สโซฮอล์ 91", "แก๊สโซฮอล์ 95"]
             oil_options = {}
             
             for key, val in ptt_prices.items():
@@ -74,19 +74,26 @@ with st.sidebar:
     st.header("⏱️ การปฏิบัติงาน & บัฟเฟอร์เวลา")
     DEPART_TIME = st.time_input("เวลาเริ่มออกรถจากฟาร์ม", datetime.strptime("11:20", "%H:%M").time())
     
-    # 🌟 [อัปเกรดที่ 1] ปรับเวลาจอดฐาน + เวลาแปรผันตามปริมาณนม (Dynamic Service Time)
     st.markdown("**⚙️ ตั้งเวลาบริการหน้างาน (Service Time)**")
     BASE_SERVICE_MIN = st.number_input("เวลาจอดตรวจเช็คฐาน (นาที/จุด)", min_value=0, value=2, step=1)
     PER_LITER_SEC = st.number_input("เวลาขนย้ายนมเพิ่มเติม (วินาที/ลิตร)", min_value=0.0, value=3.0, step=0.5)
     
-    # 🌟 [อัปเกรดที่ 2] เพิ่มตัวคูณสภาพจราจร (Traffic Padding Factor) ป้องกันเวลาโลกสวยเกินจริง
+    # 🌟 [ปรับปรุงหมายเหตุจุดที่ 1] เพิ่มคู่มือสคริปต์ Scenario วิเคราะห์สภาพรถติดในสไลเดอร์แบบชัดเจน
     st.markdown("**🚗 บัฟเฟอร์เผื่อรถติด (Traffic Factor)**")
     TRAFFIC_MULTIPLIER = st.slider(
         "ตัวคูณเวลาเดินทางตามสภาพจราจร", 
         min_value=1.0, max_value=2.5, value=1.3, step=0.1,
-        help="1.0 = วิ่งความเร็วปกติ, 1.3 = เผื่อรถติดเขตเมือง/ทำถนน 30%, 1.8+ = รถติดหนักช่วงเร่งด่วน"
+        help="""💡 **คู่มือการปรับค่าตามสถานการณ์จริง:**
+        
+☀️ **1.0 - 1.1 [ทางโล่งมาก]** : วิ่งวันหยุดยาว, ถนนโล่งพิเศษ, หรือวิ่งรอบดึก
+🚗 **1.2 - 1.4 [จราจรปกติ]** : วันธรรมดาทั่วไป วิ่งรอบสายๆ หรือรอบบ่าย (แนะนำค่าเริ่มต้น 1.3)
+🛑 **1.5 - 1.7 [รถติดขัด]** : เขตเมืองหนาแน่น, มีการทำถนน, หรือช่วงโรงเรียนเลิก
+⛈️ **1.8 - 2.5 [วิกฤต/ฝนตก]** : เย็นวันศุกร์สิ้นเดือน, ฝนตกหนัก, น้ำท่วมขัง รถเคลื่อนตัวได้ช้ามาก
+
+*หมายเหตุ: ยิ่งปรับตัวเลขสูง ระบบจะยิ่งเผื่อเวลาเดินทางให้คนขับทำงานได้จริง ไม่โลกสวย!*"""
     )
-    
+    st.caption("📌 **คู่มือด่วน:** วันทั่วไปใช้ `1.3` / ถ้าฝนตกหรือรถติดหนักให้ปรับเป็น `1.8 ขึ้นไป` เพื่อเผื่อเวลาไม่ให้คนขับส่งของเลท")
+
     st.header("⛽ ราคาน้ำมัน Real-time")
     oil_data, update_date = fetch_today_oil_price()
     if oil_data:
@@ -175,7 +182,6 @@ else:
 # ==========================================
 st.markdown("---")
 if st.button("🚀 คำนวณโมเดลจำลองเส้นทางขั้นสูง", type="primary", use_container_width=True):
-    # คำนวณ Demand รายจุด
     demands = []
     for i, row in edited_df.iterrows():
         if i == 0: 
@@ -197,7 +203,6 @@ if st.button("🚀 คำนวณโมเดลจำลองเส้นท�
         manager = pywrapcp.RoutingIndexManager(len(coords), num_vehicles, 0)
         routing = pywrapcp.RoutingModel(manager)
         
-        # 🌟 ลอจิกมิติเวลาอัปเกรด (ความเร็วรถ + บัฟเฟอร์รถติด + เวลาจอดแปรผันตามจำนวนนมจริง)
         def time_callback(from_index, to_index):
             from_node = manager.IndexToNode(from_index)
             to_node = manager.IndexToNode(to_index)
@@ -205,10 +210,8 @@ if st.button("🚀 คำนวณโมเดลจำลองเส้นท�
             d = dist_matrix[from_node][to_node]
             speed_kmh = 30 if ROUTE_TYPE == "fastest" else 25 
             
-            # เวลาเดินทางฐาน (นาที) + คูณบัฟเฟอร์จราจรตัวจริงหนีความโลกสวย
             travel_time_min = ((d / 1000) / speed_kmh * 60) * TRAFFIC_MULTIPLIER
             
-            # เวลาบริการหน้างานแปรผันตามขนาดของนมที่จุดต้นทาง (ถ้าไม่ใช่จุดเริ่ม)
             service_time_min = 0
             if from_node != 0:
                 node_milk_volume = demands[from_node]
@@ -219,7 +222,6 @@ if st.button("🚀 คำนวณโมเดลจำลองเส้นท�
         transit_idx = routing.RegisterTransitCallback(time_callback)
         routing.SetArcCostEvaluatorOfAllVehicles(transit_idx)
         
-        # เพิ่มมิติเวลา (Time Dimension) เข้า Routing Model
         routing.AddDimension(transit_idx, 2880, 2880, False, "Time")
         time_dim = routing.GetDimensionOrDie("Time")
         
@@ -229,7 +231,6 @@ if st.button("🚀 คำนวณโมเดลจำลองเส้นท�
         for v_idx in range(num_vehicles):
             time_dim.CumulVar(routing.Start(v_idx)).SetValue(DEPART_TIME.hour * 60 + DEPART_TIME.minute)
         
-        # เงื่อนไขเวลาของลูกค้า (Time Windows)
         for i, row in edited_df.iterrows():
             idx = manager.NodeToIndex(i)
             s = time_to_min(row.get("เริ่มรับได้")) or 0
@@ -238,18 +239,15 @@ if st.button("🚀 คำนวณโมเดลจำลองเส้นท�
             if i != 0 and e < 2880:
                 time_dim.SetCumulVarSoftUpperBound(idx, e, 100)
 
-        # 🌟 [อัปเกรดที่ 3] เปิดมิติระบบ Disjunction Penalty ป้องกันโค้ดค้าง/พัง เมื่อกรอกเงื่อนไขแน่นเกินไป
         penalty_value = 100000
         for node in range(1, len(coords)):
             routing.AddDisjunction([manager.NodeToIndex(node)], penalty_value)
 
-        # มิติความจุถังนม (Capacity Dimension)
         def demand_callback(idx): return demands[manager.IndexToNode(idx)]
         demand_idx = routing.RegisterUnaryTransitCallback(demand_callback)
         fleet_capacities = [v['capacity'] for v in vehicles_data]
         routing.AddDimensionWithVehicleCapacity(demand_idx, 0, fleet_capacities, True, "Capacity")
 
-        # ค้นหาคำตอบด้วย Guided Local Search
         search_params = pywrapcp.DefaultRoutingSearchParameters()
         search_params.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.AUTOMATIC
         search_params.local_search_metaheuristic = routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
@@ -275,7 +273,6 @@ if st.button("🚀 คำนวณโมเดลจำลองเส้นท�
                     })
                 except: pass
 
-        # ค้นหาจุดที่โดนดรอปออกเนื่องจากเวลาหน้างานวิ่งไม่ทันแน่ ๆ
         dropped_nodes = []
         for node in range(len(coords)):
             if routing.IsStart(manager.NodeToIndex(node)) or routing.IsEnd(manager.NodeToIndex(node)):
@@ -283,7 +280,6 @@ if st.button("🚀 คำนวณโมเดลจำลองเส้นท�
             if solution.Value(routing.NextVar(manager.NodeToIndex(node))) == manager.NodeToIndex(node):
                 dropped_nodes.append(node)
 
-        # จัดการข้อมูลรายคันรถ
         for v_idx in range(num_vehicles):
             route_indices = []
             index = routing.Start(v_idx)
@@ -335,10 +331,11 @@ if st.button("🚀 คำนวณโมเดลจำลองเส้นท�
                 st.error(f"❌ TomTom API ปฏิเสธการทำงานของรถคันที่ {v_idx+1}: {res.text}")
                 st.stop()
 
-        # แจ้งเตือนเรื่องจุดจัดส่งที่ระบบจำเป็นต้องคัดออกกรณีทำเวลาไม่ทันจริง ๆ
+        # 🌟 [ปรับปรุงหมายเหตุจุดที่ 2] อธิบายเจตจำนงของ Drop Nodes ให้ฝ่ายจัดจัดส่งเข้าใจชัดเจนแบบไม่งงลอจิกคณิตศาสตร์
         if dropped_nodes:
-            st.warning(f"⚠️ มีจุดส่งของจำนวน {len(dropped_nodes)} จุดที่เงื่อนไขเวลาแน่นเกินไป ระบบจึงคัดออกเพื่อความปลอดภัยหน้างาน")
-            with st.expander("🔍 ดูรายชื่อสถานที่ที่ข้ามไปในวันนี้"):
+            st.warning(f"⚠️ **แจ้งเตือนระบบจัดรถ:** มีจุดส่งของจำนวน {len(dropped_nodes)} จุดที่ระบบจำเป็นต้องข้ามไปในวันนี้")
+            st.info("💡 **หมายเหตุถึงฝ่ายจัดส่ง (Scenario Analysis):** สาเหตุเกิดจากสภาพจราจรที่หนาแน่นขึ้น (ตามค่าวัดที่คุณปรับบนสไลเดอร์) หรือเงื่อนไขเวลารับของของลูกค้ารัดตัวเกินไปจนรถวิ่งไปไม่ทันจริง ๆ ระบบจึงคัดออกเพื่อป้องกันไม่ให้คนขับส่งเลท และไม่ให้กระทบต่อลูกค้าร้านอื่น ๆ ที่เหลือในเส้นทาง (คุณสามารถจัดรถเสริม/Outsource มารับงานในจุดเหล่านี้แทนได้)")
+            with st.expander("🔍 ดูรายชื่อสถานที่ที่ข้ามไปในวันนี้ (แนะนำให้จัดรถเสริมแยกต่างหาก)"):
                 for dn in dropped_nodes:
                     st.write(f"- ❌ [{edited_df.iloc[dn].get('ชื่อสถานที่', 'ไม่มีชื่อ')}] (ต้องส่งก่อน: {edited_df.iloc[dn].get('ต้องส่งก่อน', '-')})")
 
@@ -399,7 +396,6 @@ if st.button("🚀 คำนวณโมเดลจำลองเส้นท�
                     r_indices = res_data['indices']
                     v_loaded_milk = 0 
                     
-                    # 🌟 [อัปเกรดที่ 4] ตัวแปรสร้างข้อความสรุปใบงานส่งเข้ากลุ่ม LINE รายวัน
                     line_text_summary = f"🚚 **ใบงานจัดส่ง: รถคันที่ {v_idx+1} ({res_data['config']['mode'].upper()})**\n"
                     line_text_summary += f"• ระยะทาง: {res_data['dist_km']:.2f} กม. | ค่าน้ำมันประเมิน: ฿{res_data['cost']:.2f}\n"
                     line_text_summary += f"• เวลาออกรถจากฟาร์ม: {DEPART_TIME.strftime('%H:%M')} น.\n\n📍 *ลำดับคิวงานคนขับรถ:*\n"
@@ -455,7 +451,6 @@ if st.button("🚀 คำนวณโมเดลจำลองเส้นท�
                         column_config={"นำทาง": st.column_config.LinkColumn("📍 นำทาง", display_text="เปิดแผนที่")}
                     )
                     
-                    # 🌟 กล่องสําหรับให้ผู้ใช้กดคัดลอกเอาไปส่งต่อในกลุ่ม LINE ได้ทันทีไม่ต้องสลับหน้าจอไปมา
                     st.subheader("💬 ข้อความส่งไลน์สำหรับคนขับ (LINE Quick Share)")
                     st.text_area("ก๊อปปี้ข้อความด้านล่างนี้ ส่งเข้ากลุ่ม LINE คนขับรถคันนี้ได้ทันที", value=line_text_summary, height=140, key=f"line_txt_{v_idx}")
                     
